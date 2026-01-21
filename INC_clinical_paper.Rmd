@@ -1,0 +1,1882 @@
+---
+title: "KS Data"
+author: "Josh"
+output: html_document
+---
+
+```{r echo=FALSE}
+
+library(dplyr)
+library(dtplyr)
+library(collapse)
+library(tidyr)
+library(data.table)
+library(splines)
+library(survey)
+library(mitools)
+library(mvtnorm)
+library(kableExtra)
+library(lubridate)
+library(purrr)
+
+load("/Users/joshslone/Library/CloudStorage/OneDrive-Vanderbilt/KS_MI_datasets/Base_data/all_cohort_imp1.Rda") 
+load("/Users/joshslone/Library/CloudStorage/OneDrive-Vanderbilt/KS_MI_datasets/Base_data/all_cd4_1.Rda") 
+#all_cd4_1 = all_cd4_1 |> filter(!is.na(month_avg_cd4))
+
+load("/Users/joshslone/Library/CloudStorage/OneDrive-Vanderbilt/KS_MI_datasets/Base_data/all_cd4.Rda") 
+
+load("/Users/joshslone/Library/CloudStorage/OneDrive-Vanderbilt/KS_MI_datasets/Base_data/all_val_long4.Rda") 
+load("/Users/joshslone/Library/CloudStorage/OneDrive-Vanderbilt/KS_MI_datasets/Base_data/all_val_long4_1.Rda")
+
+load("/Users/joshslone/Library/CloudStorage/OneDrive-Vanderbilt/KS_MI_datasets/Base_data/all_val_long.Rda")
+
+
+patients_all = fread("/Users/joshslone/Library/CloudStorage/OneDrive-Vanderbilt/KS_MI_datasets/Sampling_frame/patients_all.csv")
+names(patients_all)="patient"
+
+
+all_val_long4$R=1
+
+d_1 = all_cohort_imp1 |> filter(patient %in% all_val_long$patient)  |> left_join(all_val_long4[,c('patient','R')]) |> count(patient,stop_d,program,death_y,R) |> mutate(n=NULL,R=if_else(is.na(R),0,R))
+
+#################################################################################################################################
+#################################################################################################################################
+
+#### Create analysis dataset by date changes
+
+#################################################################################################################################
+#################################################################################################################################
+
+#### use one row for all patients in cohort 
+d = all_cohort_imp1 |> inner_join(patients_all,by="patient")  
+  
+## Remove patients w/ dis_d < as.Date("2009-12-01")
+d1 = d |> filter(is.na(dis_d) | !is.na(dis_d) & as.Date(dis_d) >= as.Date("2009-12-01") & program==1 | !is.na(dis_d) & as.Date(dis_d) >= as.Date("2010-01-01") & program==0)  
+
+
+#################################################################################################################################
+#################################################################################################################################
+
+#### CHECK PATIENTS WHO ARE NOT ELIGIBLE IN UPDATED ANALYSIS BUT WERE EARLIER
+
+# load("/Users/joshslone/Library/CloudStorage/OneDrive-Vanderbilt/KS_incidence/INC_datasets.Rda") 
+# 
+# setdiff(unique(d6_val$patient),unique(d6[d6$V==1,]$patient))
+# 
+# d |> filter(patient %in% c("229852", "295809", "62919")) |> View()
+
+#################################################################################################################################
+#################################################################################################################################
+
+
+
+
+d1 = d |> filter(is.na(dis_d) | !is.na(dis_d) & as.Date(dis_d) >= as.Date("2010-01-01")) 
+
+
+##### THIS IS UPDATE FOR CN TRUE NEGATIVE !!!!
+
+d1_val = d |> filter(is.na(canc_d_final) | !is.na(canc_d_final) & as.Date(canc_d_final) >= as.Date("2010-01-01")) |> mutate(canc_d_final=if_else(patient=="pe.3397",as.Date(NA),canc_d_final),ks_y_final=if_else(patient=="pe.3397",0,ks_y_final))
+
+#################################################################################################################################
+#################################################################################################################################
+#### Phase-2 counting process data
+
+
+## get our comparable dataset 
+cd4_df_val = all_val_long4_1 |> ungroup() |> select(patient,cd4_v_final,cd4_d_final) |> mutate(date=cd4_d_final)
+art_df_val = d1_val |> filter(V==1) |> select(patient,recart_d_final) |> mutate(art_final=if_else(is.na(recart_d_final),0,1),date=recart_d_final) 
+# event_df_val = d1_val |> filter(V==1) |> select(patient,canc_d_final,ks_y_final,l_alive_d_final,death_d_final,enrol_d_final) |> mutate(last_d_final=if_else(!is.na(canc_d_final) & as.Date(canc_d_final)<as.Date(l_alive_d_final) & as.Date(canc_d_final)>=as.Date("2010-01-01"),as.Date(canc_d_final),as.Date(l_alive_d_final))) |> mutate(last_d_final=if_else(last_d_final<as.Date("2010-01-01"),as.Date("2010-01-01"),last_d_final),date=last_d_final,first_d_final=if_else(as.Date(enrol_d_final)<as.Date("2010-01-01"),as.Date("2010-01-01"),as.Date(enrol_d_final))) |> mutate(prevalent_remove_final = if_else(!is.na(canc_d_final) & canc_d_final <= enrol_d_final + 60,1,0)) |> filter(prevalent_remove_final==0 & (is.na(canc_d_final) | as.Date(canc_d_final)>=as.Date("2010-01-01")))
+
+event_df_val = d1_val |> filter(V==1) |> select(patient,canc_d_final,ks_y_final,l_alive_d_final,death_d_final,enrol_d_final) |> mutate(last_d_final=if_else(!is.na(canc_d_final) & as.Date(canc_d_final)<as.Date(l_alive_d_final) & as.Date(canc_d_final)>=as.Date("2010-01-01"),as.Date(canc_d_final),as.Date(l_alive_d_final)))  |> filter(last_d_final>=as.Date("2010-01-01")) |> mutate(date=last_d_final,first_d_final=if_else(as.Date(enrol_d_final)<as.Date("2010-01-01"),as.Date("2010-01-01"),as.Date(enrol_d_final))) |> mutate(prevalent_remove_final = if_else(!is.na(canc_d_final) & canc_d_final <= enrol_d_final + 60,1,0)) |> filter(prevalent_remove_final==0 & (is.na(canc_d_final) | as.Date(canc_d_final)>=as.Date("2010-01-01")))
+
+
+
+event_df_val1 <- event_df_val |> mutate(date=NULL) |>  pivot_longer(
+    cols = c(first_d_final,last_d_final), 
+    names_to = "date_type",
+    values_to = "date") |> 
+  left_join(event_df_val[,c('patient','first_d_final','last_d_final')])   |> mutate(time=if_else(is.na(canc_d_final),as.numeric(as.Date(last_d_final)-as.Date(first_d_final))+1,as.numeric(as.Date(canc_d_final)-as.Date(first_d_final))+1))
+ 
+
+merged_df0 <- cd4_df_val |>
+  full_join(art_df_val, by = c("patient", "date")) |>
+  full_join(event_df_val1, by = c("patient", "date")) |>
+  arrange(patient, date) |>
+  group_by(patient) 
+
+
+
+calend_yr = event_df_val1 |>
+  group_by(patient) |>
+  dplyr::summarise(min_yr = min(year(date)) , max_yr = max(year(date))) |>
+  #mutate(min_yr = if_else(min_yr+1<=max_yr,min_yr+1,min_yr)) |> 
+  filter(min_yr!=max_yr)
+
+
+calend_dt <- calend_yr |>
+  mutate(years = map2(min_yr, max_yr, ~ seq(.x, .y))) |>
+  unnest(years) |>
+  mutate(date = ymd(paste(years, "/01/01"))) |>
+  dplyr::select(patient, date)
+
+  
+
+# Final counting process dataset
+suppressWarnings({counting_df_val <- merged_df0 |> lazy_dt() |>
+  full_join(calend_dt, by = c("patient", "date")) |> filter(patient %in% event_df_val$patient) |>
+  arrange(patient, date) |>
+  group_by(patient) |>
+  fill(art_final, recart_d_final, ks_y_final) |>
+  mutate(art_final = ifelse(is.na(art_final), 0, art_final),
+         ks_y_final = ifelse(is.na(ks_y_final), 0, ks_y_final)) |>
+  mutate(event_final = lead(ks_y_final)) |>  filter(!is.na(date))  |> 
+  mutate(enrol_d_final=NULL) |>   fill(first_d_final,last_d_final,.direction="updown") |> 
+  mutate(cd4_days=abs(cd4_d_final-first_d_final))  |> 
+  mutate(first_cd4=if_else(!is.na(cd4_days) & cd4_days==min(cd4_days,na.rm=T) & cd4_days<=183,1,0), day_dir=cd4_d_final-first_d_final) |>  
+  mutate(cd4_v_final1 = ifelse(first_cd4 == 1,cd4_v_final,NA),cd4_d_final1 = ifelse(first_cd4 == 1,cd4_d_final,NA)) |> 
+  fill(cd4_v_final1,cd4_d_final1,.direction="downup") |> 
+  mutate(cd4_v_final = ifelse(first_d_final == date,cd4_v_final1,cd4_v_final),cd4_d_final =ifelse(first_d_final ==  date,cd4_d_final1,cd4_d_final),cd4_v_final1=NULL,cd4_d_final1=NULL,cd4_d_final=as.Date(cd4_d_final)) |>  
+  fill(cd4_v_final,cd4_d_final) |> filter(date>=first_d_final & date<=last_d_final) |> 
+    mutate(event_final=if_else(row_number() != n()-1,0,event_final),
+         start_date = min(date),start = as.numeric(date - start_date),
+         stop = lead(start)) |> filter(row_number() != n()) |> 
+  ungroup() |>
+  select(patient,date,start,stop,cd4_v_final,art_final,event_final,time) |> 
+  mutate(year=year(date)) |> 
+  group_by(patient, year, art_final, cd4_v_final) |> 
+  summarize(min=min(start),max=max(stop),date=min(date),ct=n(),time=max(time,na.rm = T),event_final=max(event_final)) |>
+  mutate(fu=max-min) |> 
+  arrange(patient,date) |> group_by(patient) |> mutate(row=row_number()) |> ungroup() |> as.data.frame()})
+
+counting_df_val1 = counting_df_val |> left_join(d1[,c('patient','male_final','program','birth_d_final')]) |> mutate(age_final=if_else(row==1,date-birth_d_final,NA),fu=if_else(fu==0,1,fu))
+
+d6_val = counting_df_val1 |> mutate(cd4_rt_final=sqrt(cd4_v_final),ks_final=event_final)
+
+
+
+#################################################################################################################################
+#################################################################################################################################
+
+
+#################################################################################################################################
+#################################################################################################################################
+#### Phase-1 counting process data
+
+
+## get our comparable dataset 
+cd4_df = all_cd4 |> ungroup() |> select(patient,cd4_v,cd4_d) |> mutate(date=cd4_d)
+art_df = d1 |> select(patient,art_sd) |> mutate(art=if_else(is.na(art_sd),0,1),date=art_sd) 
+# event_df = d1 |> select(patient,dis_d,ks_y,stop_d,death_d,enrol_d) |> mutate(last_d=if_else(!is.na(dis_d) & as.Date(dis_d)<as.Date(stop_d) & as.Date(dis_d)>=as.Date("2010-01-01"),as.Date(dis_d),as.Date(stop_d))) |> mutate(last_d=if_else(last_d<as.Date("2010-01-01"),as.Date("2010-01-01"),last_d),date=last_d,first_d=if_else(as.Date(enrol_d)<as.Date("2010-01-01"),as.Date("2010-01-01"),as.Date(enrol_d))) |> mutate(prevalent_remove = if_else(!is.na(dis_d) & dis_d <= enrol_d + 60,1,0)) |> filter(prevalent_remove==0 & (is.na(dis_d) | as.Date(dis_d)>=as.Date("2010-01-01")))  
+
+event_df = d1 |> select(patient,dis_d,ks_y,stop_d,death_d,enrol_d) |> mutate(last_d=if_else(!is.na(dis_d) & as.Date(dis_d)<as.Date(stop_d) & as.Date(dis_d)>=as.Date("2010-01-01"),as.Date(dis_d),as.Date(stop_d))) |> filter(last_d>=as.Date("2010-01-01")) |> mutate(date=last_d,first_d=if_else(as.Date(enrol_d)<as.Date("2010-01-01"),as.Date("2010-01-01"),as.Date(enrol_d))) |> mutate(prevalent_remove = if_else(!is.na(dis_d) & dis_d <= enrol_d + 60,1,0)) |> filter(prevalent_remove==0 & (is.na(dis_d) | as.Date(dis_d)>=as.Date("2010-01-01")))  
+
+
+event_df1 <- event_df |> mutate(date=NULL) |>  pivot_longer(
+    cols = c(first_d,last_d), 
+    names_to = "date_type",
+    values_to = "date") |> 
+  left_join(event_df[,c('patient','first_d','last_d')])   |> mutate(time=if_else(is.na(dis_d),as.numeric(as.Date(last_d)-as.Date(first_d))+1,as.numeric(as.Date(dis_d)-as.Date(first_d))+1))
+ 
+
+merged_df01 <- cd4_df |>
+  full_join(art_df, by = c("patient", "date")) |>
+  full_join(event_df1, by = c("patient", "date")) |>
+  arrange(patient, date) |>
+  group_by(patient) 
+
+
+
+calend_yr1 = event_df1 |>
+  group_by(patient) |>
+  dplyr::summarise(min_yr = min(year(date)) , max_yr = max(year(date))) |>
+  #mutate(min_yr = if_else(min_yr+1<=max_yr,min_yr+1,min_yr)) |> 
+  filter(min_yr!=max_yr)
+
+
+calend_dt1 <- calend_yr1 |>
+  mutate(years = map2(min_yr, max_yr, ~ seq(.x, .y))) |>
+  unnest(years) |>
+  mutate(date = ymd(paste(years, "/01/01"))) |>
+  dplyr::select(patient, date)
+
+  
+
+# Final counting process dataset
+suppressWarnings({counting_df <- merged_df01 |> lazy_dt() |>
+  full_join(calend_dt1, by = c("patient", "date")) |> filter(patient %in% event_df$patient) |>
+  arrange(patient, date) |>
+  group_by(patient) |>
+  fill(art, art_sd, ks_y) |>
+  mutate(art = ifelse(is.na(art), 0, art),
+         ks_y = ifelse(is.na(ks_y), 0, ks_y)) |>
+  mutate(event = lead(ks_y)) |>  filter(!is.na(date))  |> 
+  mutate(enrol_d=NULL) |>   fill(first_d,last_d,.direction="updown") |> 
+  mutate(cd4_days=abs(cd4_d-first_d))  |> 
+  mutate(first_cd4=if_else(!is.na(cd4_days) & cd4_days==min(cd4_days,na.rm=T) & cd4_days<=183,1,0), day_dir=cd4_d-first_d) |>  
+  mutate(cd4_v1 = ifelse(first_cd4 == 1,cd4_v,NA),cd4_d1 = ifelse(first_cd4 == 1,cd4_d,NA)) |> 
+  fill(cd4_v1,cd4_d1,.direction="downup") |> 
+  mutate(cd4_v = ifelse(first_d == date,cd4_v1,cd4_v),cd4_d =ifelse(first_d ==  date,cd4_d1,cd4_d),cd4_v1=NULL,cd4_d1=NULL,cd4_d=as.Date(cd4_d)) |>  
+  fill(cd4_v,cd4_d) |> filter(date>=first_d & date<=last_d) |> 
+    mutate(event=if_else(row_number() != n()-1,0,event),
+         start_date = min(date),start = as.numeric(date - start_date),
+         stop = lead(start)) |> filter(row_number() != n()) |> 
+  ungroup() |>
+  select(patient,date,start,stop,cd4_v,art,event,time) |> 
+  mutate(year=year(date)) |> 
+  group_by(patient, year, art, cd4_v) |> 
+  summarize(min=min(start),max=max(stop),date=min(date),ct=n(),time=max(time,na.rm = T),event=max(event)) |>
+  mutate(fu=max-min) |> 
+  arrange(patient,date) |> group_by(patient) |> mutate(row=row_number()) |> ungroup() |> as.data.frame()})
+
+counting_df1 = counting_df |> left_join(d1[,c('patient','male','program','birth_d')]) |> mutate(age=if_else(row==1,date-birth_d,NA),fu=if_else(fu==0,1,fu))
+
+d6 = counting_df1 |> mutate(cd4_rt=sqrt(cd4_v),ks=event)
+
+#################################################################################################################################
+#################################################################################################################################
+
+### cd4 missingness
+
+
+# ch= d6 |>  group_by(patient) |> filter(V==1 & row_number()==1)
+# 
+# ch1=ch[is.na(ch$cd4_rt_final),]
+# 
+# ch2=length(unique(d6[!is.na(d6$cd4_rt_final) & d6$V==1,]$patient))
+
+### 255150 total and 203880 have at least one
+
+### 830 total and 96 have at least one
+
+c = d1 |> mutate(prevalent_remove = if_else(!is.na(dis_d) & dis_d <= enrol_d + 60,1,0)) |> mutate(prevalent_remove_final = if_else(V==0,0, if_else(V==1 & !is.na(canc_d_final) & canc_d_final <= enrol_d_final + 60,1,0))) |> filter(prevalent_remove == 0 &  prevalent_remove_final==0 & (is.na(canc_d_final) | as.Date(canc_d_final)>=as.Date("2009-12-01"))) 
+
+c1=c |> select(patient,program,male,dis_d,canc_d_final,stop_d,age_at_start,enrol_d,enrol_d_final,art_sd,recart_d_final) |> mutate(first_d=if_else(as.Date(enrol_d)<as.Date("2010-01-01"),as.Date("2010-01-01"),as.Date(enrol_d)),last_d=if_else(!is.na(dis_d) & as.Date(dis_d)<as.Date(stop_d) & as.Date(dis_d)>=as.Date("2010-01-01"),as.Date(dis_d),as.Date(stop_d)),first_d_final=if_else(as.Date(enrol_d_final)<as.Date("2010-01-01"),as.Date("2010-01-01"),as.Date(enrol_d_final)),last_d_final=if_else(!is.na(canc_d_final) & as.Date(canc_d_final)<as.Date(stop_d) & as.Date(canc_d_final)>=as.Date("2010-01-01"),as.Date(canc_d_final),as.Date(stop_d))) |> mutate(last_d=if_else(last_d<as.Date("2010-01-01"),as.Date("2010-01-01"),last_d),last_d_final=if_else(last_d_final<as.Date("2010-01-01"),as.Date("2010-01-01"),last_d_final),fu_time=as.numeric(as.Date(last_d)-as.Date(first_d)+1),inc=if_else(is.na(dis_d),0,1)) |> arrange(fu_time)
+
+# rm(list=setdiff(ls(), c("c1","d6","d_1","d1","d6_val")))
+# 
+# gc()
+
+
+save(d1,d6,d6_val,d_1,file="/Users/joshslone/Library/CloudStorage/OneDrive-Vanderbilt/KS_incidence/INC_datasets.Rda") 
+
+load("/Users/joshslone/Library/CloudStorage/OneDrive-Vanderbilt/KS_incidence/INC_datasets.Rda")
+
+
+
+#d6_val = d6_val |> filter(!(patient %in% c("74605","pe.3397")))
+
+
+d6_val = d6_val |> filter(!(patient %in% c("74605")))
+
+
+# 
+# m=10
+# j=0
+set.seed(1993)
+# betas_ipw_inc1 = vcovs_ipw_inc1 = betas_gr_mi_inc1 = vcovs_gr_mi_inc1 = betas_ipw_inc2 = vcovs_ipw_inc2 = betas_gr_mi_inc2 = vcovs_gr_mi_inc2 = betas_ipw_inc3 = vcovs_ipw_inc3 = betas_gr_mi_inc3 = vcovs_gr_mi_inc3 = betas_ehr_inc = vcovs_ehr_inc = vector("list", m)
+# 
+# for(i in 1:m){
+
+    b1 = d6[d6$row==1,]
+    ### imputation for phase 1 cd4 values based on error prone variables
+    mod5 = lm(cd4_rt ~  male +program+ ns(age,df=4) + year +art +  ks*ns(time,df=2), data= b1) 
+   ## to easily get design matrix for the full cohort
+    d6_1 = b1 |> mutate(cd4_rt=1)
+    v3=model.matrix(terms(mod5),d6_1)
+    beta2 = mod5$coefficients
+    vcov2 = vcov(mod5)
+    rmvs2=rmvnorm(n=1,beta2,vcov2)
+    rmvs2 = as.vector(rmvs2)
+    cd4_rt_new = as.vector((v3 %*% rmvs2) + sample(resid(mod5),1))
+    
+    b1$cd4_rt_init_imp=if_else(is.na(b1$cd4_rt),cd4_rt_new,b1$cd4_rt)
+    b2 = d6[d6$row!=1,] |> mutate(cd4_rt_init_imp=cd4_rt)
+    d6=rbind(b1,b2) |> arrange(patient,row) |> mutate(cd4_rt_init_imp=if_else(cd4_rt_init_imp<=0,1,cd4_rt_init_imp)) |> fill(cd4_rt_init_imp,age)
+  
+
+  ### imputation for phase 2 cd4 values
+    
+    b1_incommon = b1 |> filter(patient %in% d6_val$patient) 
+    
+    b1_val = d6_val |> filter(row==1) |> left_join(b1_incommon[,c("patient","cd4_rt_init_imp")]) |> mutate(ch=abs(cd4_rt_init_imp-cd4_rt_final)) |> arrange(ch)
+    
+  mod6 = lm(cd4_rt_final ~  male_final +program+ ns(age_final,df=4) + ns(cd4_rt_init_imp,df=4) + year +art_final + ks_final*ns(time,df=2), data= b1_val)
+    ## to easily get design matrix for phase 2
+  d6_1 = b1_val |> mutate(cd4_rt_final=1)
+   v4=model.matrix(terms(mod6),d6_1)
+  beta2 = mod6$coefficients
+  vcov2 = vcov(mod6)
+  rmvs2=rmvnorm(n=1,beta2,vcov2)
+  rmvs2 = as.vector(rmvs2)
+  cd4_rt_final_new = as.vector((v4 %*% rmvs2) + sample(resid(mod6),1))
+  
+  b1_val$cd4_rt_imp_final=if_else(is.na(b1_val$cd4_rt_final),cd4_rt_final_new,b1_val$cd4_rt_final)
+  b2_val = d6_val[d6_val$row!=1,] |> mutate(cd4_rt_imp_final=cd4_rt_final)
+  b1_val = b1_val |> mutate(ch=NULL, cd4_rt_init_imp=NULL)
+  d6_val=rbind(b1_val,b2_val) |> arrange(patient,row) |> mutate(cd4_rt_imp_final=if_else(cd4_rt_imp_final<=0,1,cd4_rt_imp_final)) |> fill(cd4_rt_imp_final)
+  
+
+#rm(mod5, mod6)
+
+d61 = d6 |> mutate(age=round(as.numeric(age/365.25),3),fu=fu/365.25,cd4_rt_init_imp=round(cd4_rt_init_imp,3))
+    
+mod_ehr_inc = glm(event ~ male+program+I(age/10)+I(year-2010)+art + cd4_rt_init_imp,offset = log(fu/1000),data= d61, family = poisson) 
+    
+
+## Get these datasets to match for overlap phase-1 and phase-2, using old code or new code 
+d_c1=d6 |> filter(patient %in% unique(d6_val$patient)) |> mutate(min_fu=date,max_fu=as.Date(date+fu-1))
+d6_val = d6_val |> mutate(min_fu=date,max_fu=as.Date(date+fu-1))
+d6 = d6 |> mutate(min_fu=date,max_fu=as.Date(date+fu-1))
+
+
+### Get overlapping timeframes
+## get date ranges for each patient who was validated based on their phase 1 and phase 2 data
+### phase 1
+cc1= d_c1 |> lazy_dt() |> group_by(patient) |> dplyr::summarize(n1=max(row_number()),d_min1=min(min_fu),d_max1=max(max_fu)) |> ungroup() |> as.data.frame()
+### phase 2
+cc2= d6_val |> lazy_dt() |> group_by(patient) |> dplyr::summarize(n2=max(row_number()),d_min2=min(min_fu),d_max2=max(max_fu)) |> ungroup() |> as.data.frame()
+
+### phase-1 and phase-2 date ranges and rows for V==1
+cc3=cc1 |> left_join(cc2) |> mutate(min_date1= pmax(d_min1,d_min2),max_date1= pmin(d_max1,d_max2))
+
+
+#################################################################################################################################
+#################################################################################################################################
+#################################################################################################################################
+### Create overalapping phase-2 dataset for incidence analyses
+
+
+
+event_match <- cc3 |> select(patient,min_date1,max_date1) |>  pivot_longer(
+    cols = c(min_date1,max_date1), 
+    names_to = "date_type",
+    values_to = "date") |> 
+  left_join(cc3[,c('patient','min_date1','max_date1')])  
+
+merged_match <- event_match |>
+  full_join(d6_val[,c("patient", "date","art_final", "cd4_rt_imp_final", "event_final")], by = c("patient", "date")) |>
+  full_join(d_c1[,c("patient", "date","art", "cd4_rt_init_imp", "event")], by = c("patient", "date")) |>
+  arrange(patient, date) |>
+  group_by(patient) |> fill(min_date1,max_date1,.direction="updown") |> fill(art, art_final, cd4_rt_init_imp, cd4_rt_imp_final,event, event_final) |> filter(date >=min_date1 & date <= max_date1) |> dplyr::mutate(event_final=if_else(row_number() != n()-1,0,event_final),
+         start_date = min(date),start = as.numeric(date - start_date),
+         stop = lead(start)) |> filter(row_number() != n()) |>  mutate(year=year(date)) |> group_by(patient, year, art, art_final, cd4_rt_init_imp,cd4_rt_imp_final,event, event_final) |> 
+  dplyr::summarize(min=min(start),max=max(stop),date=min(date),ct=n()) |>
+  mutate(fu=max-min) |> 
+  arrange(patient,date) |> ungroup() 
+
+
+d6_2_overlap = merged_match |> left_join(d1[,c('patient','male','male_final','program','birth_d','birth_d_final')]) |> group_by(patient) |> dplyr::mutate(age=if_else(row_number()==1,date-birth_d,NA),age_final=if_else(row_number()==1,date-birth_d_final,NA),fu=if_else(fu==0,1,fu)) |> fill(age,age_final) |> ungroup()
+
+# y1= d6_2_overlap |> group_by(patient) |> summarise(n=n())
+# 
+# y2= d6_val |> group_by(patient) |> summarise(n1=n())
+# y3= d_c1 |> group_by(patient) |> summarise(n2=n())
+# 
+# y4= y1 |>left_join(y2) |> left_join(y3) |> filter(n != n1 | n != n2 | n1 != n2)
+# 
+# setdiff(unique(y2$patient),unique(y1$patient))
+# 
+# d_c1 |> filter(patient == "108581") |> View()
+# d6_val |> filter(patient == "108581") |> View()
+
+
+
+d6_all= bind_rows(d6_2_overlap,d6[!(d6$patient %in% d_c1$patient),]) |> lazy_dt() |> group_by(patient) |> fill(age,age_final) |> mutate(V=if_else(patient %in% unique(d6_2_overlap$patient),1,0)) |> ungroup() |> as.data.frame()
+
+#################################################################################################################################
+#################################################################################################################################
+#################################################################################################################################
+
+d_2 = d_1 |> filter(patient %in% unique(d6_all$patient))
+mod_w = glm(R ~ stop_d + program + death_y, family=binomial,data = d_2)
+mod_p<- mod_w$fitted.values
+d_p = data.frame(d_2,p_est=mod_p)
+
+#load(file="~/Desktop/PhD/Research/KS_Data/Code/wgts_by_hand.Rda")
+load(file="/Users/joshslone/Library/CloudStorage/OneDrive-Vanderbilt/KS_MI_datasets/MI_datasets/strata.Rda")
+
+#################################################################################################################
+#### estimated weights including nonresponse probabilities from the incidence analysis cohort
+#load("/Users/joshslone/Library/CloudStorage/OneDrive-Vanderbilt/KS_MI_datasets/Base_data/d_p.Rda") 
+pb1=d6_all |> left_join(d_c2,by="patient")|> dplyr::count(patient,strata,V) |> left_join(d_p[,c('patient','p_est')],by="patient")
+mod_w = glm(V ~ strata, family=binomial,data = pb1)
+mod_p <- mod_w$fitted.values
+pb2 = data.frame(pb1,p_est_overall=mod_p)
+pb2 = pb2 |> mutate(w_est = 1/(p_est_overall*p_est))
+#d_inc_cw = p_all |> left_join(pb2[,c('patient','w_est')],by="patient") |> mutate(fu=as.numeric(as.Date(max_fu)-as.Date(min_fu)+1))
+
+
+#d_inc_cw = d6_all |> left_join(pb2[,c('patient','w_est','strata')],by="patient") |> mutate(age=round(as.numeric(age/365.25),4),age_final=round(as.numeric(age_final/365.25),4),fu=round(fu/365.25,3),cd4_rt_init_imp=round(cd4_rt_init_imp,2),cd4_rt_imp_final=round(cd4_rt_imp_final,2))
+
+d_inc_cw = d6_all |> left_join(pb2[,c('patient','w_est','strata')],by="patient") |> mutate(age=round(as.numeric(age/365.25),3),age_final=round(as.numeric(age_final/365.25),3),fu=fu/365.25,cd4_rt_init_imp=round(cd4_rt_init_imp,3),cd4_rt_imp_final=round(cd4_rt_imp_final,3))
+
+#################################################################################################################
+
+mod_ehr_inc2 = glm(event ~ male+program+I(age/10)+I(year-2010)+art + cd4_rt_init_imp,offset = log(fu/1000),data= d_inc_cw, family = poisson)
+
+
+  #### Raking
+  IF_func <- function(fit){
+    MM <- model.matrix(fit)
+    Score.P   <- fit$y*MM - MM*exp(fit$linear.predictors)
+    InfoMat.P <- t(MM*sqrt(exp(fit$linear.predictors))) %*% (MM*sqrt(exp(fit$linear.predictors)))/nrow(MM)
+    inffunc <- (Score.P) %*% solve(InfoMat.P)
+    inffunc
+  }    
+naiveInfl3 =  IF_func(mod_ehr_inc2)[,-1]
+colnames(naiveInfl3)=paste("INF", 1:ncol(naiveInfl3), sep="")
+
+d14=cbind(d_inc_cw,naiveInfl3) 
+
+infs_eq1 <- as.formula(paste('~', paste0('INF', 1:ncol(naiveInfl3), collapse = ' + ')))
+designMF4 = twophase(id=list(~1,~1),weights=list(~1,~w_est),strata=list(~strata,NULL), data=d14,subset=~V==1,method="approx")
+Ninflcal3<-calibrate(designMF4,formula=infs_eq1,phase=2,calfun="raking") 
+fit_gr_inc_2 = svyglm(event_final ~ male_final + program + I(age_final/10) + I(year-2010) + art_final + cd4_rt_imp_final, offset = log(fu/1000), design=Ninflcal3, family = poisson)
+
+ipw_inc_3 = svyglm(event_final ~ male_final + program + I(age_final/10) + I(year-2010) + art_final + cd4_rt_imp_final, offset = log(fu/1000), design=designMF4, family = poisson)
+
+
+summary(fit_gr_inc_2)
+summary(ipw_inc_3)
+
+##### Looking at this data for follow-up on ART vs. not on ART
+
+ipw_inc_7 = svyglm(ks_ind_final ~  art_ind_final , offset = log(fu/365.25/1000), design=designMF4, family = poisson)
+
+ipw_inc_6 = svyglm(ks_ind_final ~  art_ind_final , offset = log(fu/365.25/1000), design=Ninflcal3, family = poisson)
+
+c5= d_inc_cw |> filter(V==1 & art_ind_final==0) 
+designMF6 = twophase(id=list(~1,~1),weights=list(~1,~w_est), data=c5,subset=~V==1,method="approx")
+
+
+ipw_inc_8 = svyglm(ks_ind_final ~  1 , offset = log(fu/365.25/1000), design=designMF6, family = poisson)
+
+(exp(ipw_inc_8[[1]]+c(-1,1)*sqrt(diag(vcov(ipw_inc_8)))*1.96))
+(exp(ipw_inc_8[[1]]))
+
+
+
+```
+
+
+```{r}
+#########################
+### Checking ART validated unadjusted incidence for my data and older data
+
+patients_sum = d6_val |> group_by(patient,art_final,event_final) |> dplyr::summarise(fu=sum(fu))
+
+
+ps1_no_art=patients_sum[patients_sum$art_final==0,]|> inner_join(unique(d_inc_cw[,c('patient','strata','w_est')]),join_by(patient)) |> mutate(V=1)
+
+
+designMF4 = twophase(id=list(~1,~1),weights=list(~1,~w_est), data=ps1_no_art,subset=~V==1,method="approx")
+ipw_c = svyglm(event_final ~ 1, offset = log(fu/365.25/1000), design=designMF4, family = poisson)
+(exp(ipw_c[[1]]+c(-1,1)*sqrt(diag(vcov(ipw_c)))*1.96))
+(exp(ipw_c[[1]]))
+
+
+ps1_art=patients_sum[patients_sum$art_final==1,]|> inner_join(unique(d_inc_cw[,c('patient','strata','w_est')]),join_by(patient))|> mutate(V=1)
+
+
+designMF41 = twophase(id=list(~1,~1),weights=list(~1,~w_est), data=ps1_art,subset=~V==1,method="approx")
+ipw_c1 = svyglm(event_final ~ 1, offset = log(fu/365.25/1000), design=designMF41, family = poisson)
+(exp(ipw_c1[[1]]+c(-1,1)*sqrt(diag(vcov(ipw_c1)))*1.96))
+(overall_inc_est=exp(ipw_c1[[1]]))
+
+
+
+### phase-1 unadjusted incidence on and off ART
+
+patients_sum_1 = d_inc_cw |> group_by(patient,program,art,event) |> dplyr::summarise(fu=sum(fu))
+
+mod_ch = glm(event ~ 1,offset = log(fu/365.25/1000),data= patients_sum_1[patients_sum_1$art==0 & patients_sum_1$program==0,], family = poisson) 
+
+mod_ch1 = glm(event ~ 1,offset = log(fu/1000),data= patients_sum_1[patients_sum_1$art==1 & patients_sum_1$program==0,], family = poisson) 
+
+mod_ch = glm(event ~ 1,offset = log(fu/1000),data= patients_sum_1[patients_sum_1$program==0,], family = poisson) 
+
+
+(exp(mod_ch1[[1]]+c(-1,1)*sqrt(diag(vcov(mod_ch1)))*1.96))
+(overall_inc_est=exp(mod_ch1[[1]]))
+
+(exp(mod_ch[[1]]+c(-1,1)*sqrt(diag(vcov(mod_ch)))*1.96))
+(overall_inc_est=exp(mod_ch[[1]]))
+
+
+### plots for percentage of follow-up on ART annually
+
+patients_sum_1 = d_inc_cw |> group_by(program,year) |> dplyr::summarise(art_perc=sum(fu[art==1])/sum(fu))  |> mutate(Validated="No")
+
+
+patients_sum_2 = d_inc_cw |> filter(V==1) |> group_by(program,year) |> dplyr::summarise(art_perc=sum(w_est[art_final==1]*fu[art_final==1])/sum(w_est*fu)) |> mutate(Validated="Yes")
+
+art_annual=rbind(patients_sum_1,patients_sum_2) |> mutate(Region=if_else(program==1,"EA-IeDEA","CCASAnet")) |> filter(year!=2019) |> mutate(Data=if_else(program==1 & Validated=="Yes","EA-IeDEA validated",if_else(program==1 & Validated=="No","EA-IeDEA phase-1",if_else(program==0 & Validated=="Yes","CCASAnet validated","CCASAnet phase-1"))))
+
+
+# ggplot(art_annual, aes(x = year, y = art_perc)) +
+#   geom_line(aes(color = Region, linetype = Validated))+
+# scale_color_manual(values = c("darkred", "steelblue"))+ 
+# labs(  x = "Calendar year",
+#        y = "ART use during follow-up",
+#        color = "Region",
+#        linetype = "Validated") 
+
+ggplot(art_annual, aes(x = year, y = art_perc)) +
+  geom_line(aes(color = Data))+ 
+labs(  x = "Calendar year",
+       y = "ART use during follow-up")   +
+      scale_color_brewer(palette = "Paired") +
+  ylim(0.5, 1)
+
+
+
+pdf("/Users/joshslone/Desktop/PhD/Research/KS_paper/art_followup1.pdf",width = 7,height=5)
+
+ggplot(art_annual, aes(x = year, y = art_perc)) +
+  geom_line(aes(color = Data))+ 
+labs(  x = "Calendar year",
+       y = "ART use during follow-up")   +
+      scale_color_brewer(palette = "Paired") +
+  ylim(0.5, 1)
+
+dev.off() #turn off develop
+
+
+```
+
+```{r}
+
+################################################################################################
+################################################################################################
+## Checks for ART 
+### check phase-2
+
+patients_sum = d_inc_cw |> filter(V==1) |> group_by(patient,art_final,V) |> dplyr::summarise(fu=sum(fu),event_final=max(event_final))
+
+ps1_art=patients_sum[patients_sum$art_final==1,]|> inner_join(unique(d_inc_cw[,c('patient','strata','w_est')]),join_by(patient))|> mutate(V=1)
+
+
+designMF41 = twophase(id=list(~1,~1),weights=list(~1,~w_est), data=ps1_art,subset=~V==1,method="approx")
+ipw_c1 = svyglm(event_final ~ 1, offset = log(fu/1000), design=designMF41, family = poisson)
+(exp(ipw_c1[[1]]+c(-1,1)*sqrt(diag(vcov(ipw_c1)))*1.96))
+(overall_inc_est=exp(ipw_c1[[1]]))
+
+
+ps1_no_art=patients_sum[patients_sum$art_final==0,]|> inner_join(unique(d_inc_cw[,c('patient','strata','w_est')]),join_by(patient))|> mutate(V=1)
+
+
+designMF42 = twophase(id=list(~1,~1),weights=list(~1,~w_est), data=ps1_no_art,subset=~V==1,method="approx")
+ipw_c2 = svyglm(event_final ~ 1, offset = log(fu/1000), design=designMF42, family = poisson)
+(exp(ipw_c2[[1]]+c(-1,1)*sqrt(diag(vcov(ipw_c2)))*1.96))
+(exp(ipw_c2[[1]]))
+
+ps1_all=patients_sum |> inner_join(unique(d_inc_cw[,c('patient','strata','w_est')]),join_by(patient))|> mutate(V=1)
+
+designMF43 = twophase(id=list(~1,~1),weights=list(~1,~w_est), data=ps1_all,subset=~V==1,method="approx")
+ipw_c3 = svyglm(event_final ~ art_final, offset = log(fu/1000), design=designMF43, family = poisson)
+(exp(ipw_c2[[1]]+c(-1,1)*sqrt(diag(vcov(ipw_c2)))*1.96))
+(exp(ipw_c2[[1]]))
+
+
+patients_sum_all = d_inc_cw |> filter(V==1) 
+designMF44 = twophase(id=list(~1,~1),weights=list(~1,~w_est), data=patients_sum_all,subset=~V==1,method="approx")
+ipw_c4 = svyglm(event_final ~ art_final, offset = log(fu/1000), design=designMF44, family = poisson)
+(exp(ipw_c2[[1]]+c(-1,1)*sqrt(diag(vcov(ipw_c2)))*1.96))
+(exp(ipw_c2[[1]]))
+
+
+################################################################################################
+### check phase-1
+
+
+patients_sum_a = d_inc_cw |> filter(V==0) |> group_by(patient,art) |> dplyr::summarise(fu=sum(fu),event=max(event))
+mod_a = glm(event ~ art,offset = log(fu/1000),data= patients_sum_a, family = poisson) 
+(exp(mod_a[[1]]+c(-1,1)*sqrt(diag(vcov(mod_a)))*1.96))
+(exp(mod_a[[1]]))
+
+patients_sum_a_all = d_inc_cw |> filter(V==0) 
+mod_a1 = glm(event ~ art,offset = log(fu/1000),data= patients_sum_a_all, family = poisson) 
+(exp(mod_a1[[1]]+c(-1,1)*sqrt(diag(vcov(mod_a1)))*1.96))
+(exp(mod_a1[[1]]))
+
+```
+
+
+```{r}
+### phase-1 incidence relative to ART start
+
+
+#### EA
+
+ps = d_inc_cw  |> filter(program==1) |> mutate(min_fu=date,max_fu=as.Date(date+fu*365.25-1))  |> left_join(d1[,c("patient","art_sd")]) |> group_by(patient,art, art_sd) |> dplyr::summarise(event=max(event),fu=sum(fu)*365.25,min_fu=min(min_fu),max_fu=max(max_fu))
+
+### Create variables for not on ART, ART <= 90 days, and ART > 90 days using if_else
+ps1 = ps |> mutate(fu_no=if_else(art==0,fu,0),fu_under_90=if_else(art==1 & min_fu-art_sd>90,0,if_else(art==1 &  min_fu-art_sd<=90 & min_fu-art_sd>0,as.numeric(min_fu-art_sd),if_else(art==1 & min_fu==art_sd,min(as.numeric(max_fu-art_sd+1),90),if_else(art==1 & art_sd-min_fu<=90 & art_sd-min_fu>0,as.numeric(art_sd-min_fu+1),0))))) |> group_by(patient) |> summarise(art=max(art),event=max(event),fu=sum(fu),fu_no=max(fu_no),fu_under_90=max(fu_under_90)) |> mutate(fu_over_90=round(as.numeric(fu-fu_no-fu_under_90),4))
+
+ps2 = ps1 |>  mutate(fu=NULL) |> pivot_longer(
+    cols = c(fu_no,fu_under_90,fu_over_90), 
+    names_to = "type",
+    values_to = "fu") |> group_by(patient) |> mutate(ef=if_else(event==0,0,if_else(event==1 & row_number()==1 & lead(fu,1)==0 & lead(fu,2)==0,1,if_else(event==1 & row_number()==2 & lead(fu,1)==0 & fu>0,1,if_else(event==1 & row_number()==3 & fu>0,1,0))))) 
+
+ps2_all=ps2 |> filter(fu>0) |> mutate(type = factor(type, levels = c("fu_no", "fu_under_90", "fu_over_90")))
+
+
+ps2_under_90=ps2_all |> filter(type=="fu_under_90")
+
+mod_ch = glm(ef ~ 1,offset = log(fu/365.25/1000),data= ps2_under_90, family = poisson) 
+
+ps2_over_90=ps2_all |> filter(type=="fu_over_90")
+
+mod_ch1 = glm(ef ~ 1,offset = log(fu/365.25/1000),data= ps2_over_90, family = poisson) 
+
+
+
+
+(exp(mod_ch1[[1]]+c(-1,1)*sqrt(diag(vcov(mod_ch1)))*1.96))
+(overall_inc_est=exp(mod_ch1[[1]]))
+
+mod_ch1 = glm(event ~ 1,offset = log(fu/365.25/1000),data= d_inc_cw[d_inc_cw$program==1,], family = poisson) 
+
+(exp(mod_ch1[[1]]+c(-1,1)*sqrt(diag(vcov(mod_ch1)))*1.96))
+(exp(mod_ch1[[1]]))
+
+#### LA
+
+
+ps_1 = d_inc_cw  |> filter(program==0) |> mutate(min_fu=date,max_fu=as.Date(date+fu*365.25-1))  |> left_join(d1[,c("patient","art_sd")]) |> group_by(patient,art, art_sd) |> dplyr::summarise(event=max(event),fu=sum(fu)*365.25,min_fu=min(min_fu),max_fu=max(max_fu))
+
+### Create variables for not on ART, ART <= 90 days, and ART > 90 days using if_else
+ps1_1 = ps_1 |> mutate(fu_no=if_else(art==0,fu,0),fu_under_90=if_else(art==1 & min_fu-art_sd>90,0,if_else(art==1 &  min_fu-art_sd<=90 & min_fu-art_sd>0,as.numeric(min_fu-art_sd),if_else(art==1 & min_fu==art_sd,min(as.numeric(max_fu-art_sd+1),90),if_else(art==1 & art_sd-min_fu<=90 & art_sd-min_fu>0,as.numeric(art_sd-min_fu+1),0))))) |> group_by(patient) |> summarise(art=max(art),event=max(event),fu=sum(fu),fu_no=max(fu_no),fu_under_90=max(fu_under_90)) |> mutate(fu_over_90=round(as.numeric(fu-fu_no-fu_under_90),4))
+
+ps2_1 = ps1_1 |>  mutate(fu=NULL) |> pivot_longer(
+    cols = c(fu_no,fu_under_90,fu_over_90), 
+    names_to = "type",
+    values_to = "fu") |> group_by(patient) |> mutate(ef=if_else(event==0,0,if_else(event==1 & row_number()==1 & lead(fu,1)==0 & lead(fu,2)==0,1,if_else(event==1 & row_number()==2 & lead(fu,1)==0 & fu>0,1,if_else(event==1 & row_number()==3 & fu>0,1,0))))) 
+
+ps2_all1=ps2_1 |> filter(fu>0) |> mutate(type = factor(type, levels = c("fu_no", "fu_under_90", "fu_over_90")))
+
+
+ps2_under_90=ps2_all1 |> filter(type=="fu_under_90")
+
+mod_ch = glm(ef ~ 1,offset = log(fu/365.25/1000),data= ps2_under_90, family = poisson) 
+
+ps2_over_90=ps2_all1 |> filter(type=="fu_over_90")
+
+mod_ch1 = glm(ef ~ 1,offset = log(fu/365.25/1000),data= ps2_over_90, family = poisson) 
+
+
+
+(exp(mod_ch1[[1]]+c(-1,1)*sqrt(diag(vcov(mod_ch1)))*1.96))
+(overall_inc_est=exp(mod_ch1[[1]]))
+
+
+
+```
+
+
+
+```{r}
+
+### Weighted phase-2 
+
+#########################################################################################################################
+#### East Africa: Incidence while off ART, first 90 days on ART, and after 90 days on ART
+
+ps_11 = d_inc_cw |> filter(V==1 & program==1)  |> mutate(min_fu=date,max_fu=as.Date(date+fu*365.25-1))  |> left_join(d1[,c("patient","recart_d_final")]) |> group_by(patient,art_final,recart_d_final) |> dplyr::summarise(event_final=max(event_final),fu=sum(fu)*365.25,min_fu=min(min_fu),max_fu=max(max_fu))
+
+### Create variables for not on ART, ART <= 90 days, and ART > 90 days using if_else
+ps1_11 = ps_11 |> mutate(fu_no=if_else(art_final==0,fu,0),fu_under_90=if_else(art_final==1 & min_fu-recart_d_final>90,0,if_else(art_final==1 &  min_fu-recart_d_final<=90 & min_fu-recart_d_final>0,as.numeric(min_fu-recart_d_final),if_else(art_final==1 & min_fu==recart_d_final,min(as.numeric(max_fu-recart_d_final+1),90),if_else(art_final==1 & recart_d_final-min_fu<=90 & recart_d_final-min_fu>0,as.numeric(recart_d_final-min_fu+1),0))))) |> group_by(patient) |> summarise(art_final=max(art_final),event_final=max(event_final),fu=sum(fu),fu_no=max(fu_no),fu_under_90=max(fu_under_90)) |> mutate(fu_over_90=round(as.numeric(fu-fu_no-fu_under_90),4))
+
+ps2_11 = ps1_11 |>  mutate(fu=NULL) |> pivot_longer(
+    cols = c(fu_no,fu_under_90,fu_over_90), 
+    names_to = "type",
+    values_to = "fu") |> group_by(patient) |> mutate(ef=if_else(event_final==0,0,if_else(event_final==1 & row_number()==1 & lead(fu,1)==0 & lead(fu,2)==0,1,if_else(event_final==1 & row_number()==2 & lead(fu,1)==0 & fu>0,1,if_else(event_final==1 & row_number()==3 & fu>0,1,0))))) 
+
+ps2_all_1=ps2_11 |> inner_join(unique(d_inc_cw[,c('patient','strata','w_est')]),join_by(patient))|> mutate(V=1) |> filter(fu>0) |> mutate(type = factor(type, levels = c("fu_no", "fu_under_90", "fu_over_90")))
+
+
+ps2_j1 = ps1_11 |>  mutate(fu=NULL) |> pivot_longer(
+    cols = c(fu_no,fu_under_90,fu_over_90), 
+    names_to = "type",
+    values_to = "fu_final") |> group_by(patient) |> mutate(ef_final=if_else(event_final==0,0,if_else(event_final==1 & row_number()==1 & lead(fu_final,1)==0 & lead(fu_final,2)==0,1,if_else(event_final==1 & row_number()==2 & lead(fu_final,1)==0 & fu_final>0,1,if_else(event_final==1 & row_number()==3 & fu_final>0,1,0)))))
+
+ps2_4= ps2 |> left_join(ps2_j1[,c("patient","type","fu_final","ef_final")]) |> mutate(V=if_else(!is.na(ef_final),1,0)) |> inner_join(unique(d_inc_cw[,c('patient','strata','w_est')]),join_by(patient))
+
+
+
+mod_inc3_ea = glm(ef ~ type,offset = log(fu/365.25/1000),data= ps2_4[ps2_4$fu>0,] , family = poisson) 
+
+naiveInfl3_ea =  IF_func(mod_inc3_ea)
+colnames(naiveInfl3_ea)=paste("INF", 1:ncol(naiveInfl3_ea), sep="")
+
+d14_ea=cbind(ps2_4[ps2_4$fu>0,],naiveInfl3_ea) 
+
+infs_eq1_ea <- as.formula(paste('~', paste0('INF', 1:ncol(naiveInfl3_ea), collapse = ' + ')))
+designMF4_ea = twophase(id=list(~1,~1),weights=list(~1,~w_est), data=d14_ea,subset=~V==1 & fu_final>0,method="approx")
+Ninflcal3_ea<-calibrate(designMF4_ea,formula=infs_eq1_ea,phase=2,calfun="raking") 
+fit_gr_inc_2_ea = svyglm(ef_final ~ type, offset = log(fu_final/365.25/1000), design=Ninflcal3_ea, family = poisson)
+
+
+vcovs=vcov(fit_gr_inc_2_ea)
+vcovs1=c(vcovs[1,],vcovs[2,],vcovs[3,])
+names(vcovs1)=NULL
+vcovs2=matrix(vcovs1,nrow=3,ncol=3)
+
+exp(lincom.R(par=c(1,3),mults=c(1,1),coefs = coef(fit_gr_inc_2_ea),vcov=vcovs2,N=dim(ps2_all_1)[1]))
+
+exp(lincom.R(par=c(1,2),mults=c(1,1),coefs = coef(fit_gr_inc_2_ea),vcov=vcovs2,N=dim(ps2_all_1)[1]))
+
+
+
+ps2_under_90=ps2_all_1 |> filter(type=="fu_under_90")
+designMF46 = twophase(id=list(~1,~1),weights=list(~1,~w_est), data=ps2_under_90,subset=~V==1,method="approx")
+ipw_c6 = svyglm(ef ~ 1, offset = log(fu/365.25/1000), design=designMF46, family = poisson)
+(exp(ipw_c6[[1]]+c(-1,1)*sqrt(diag(vcov(ipw_c6)))*1.96))
+(exp(ipw_c6[[1]]))
+
+ps2_over_90=ps2_all_1 |> filter(type=="fu_over_90")
+designMF47 = twophase(id=list(~1,~1),weights=list(~1,~w_est), data=ps2_over_90,subset=~V==1,method="approx")
+ipw_c7 = svyglm(ef ~ 1, offset = log(fu/365.25/1000), design=designMF47, family = poisson)
+(exp(ipw_c7[[1]]+c(-1,1)*sqrt(diag(vcov(ipw_c7)))*1.96))
+(exp(ipw_c7[[1]]))
+
+
+
+designMF45 = twophase(id=list(~1,~1),weights=list(~1,~w_est), data=ps2_all,subset=~V==1,method="approx")
+ipw_c5 = svyglm(ef ~ type, offset = log(fu/365.25/1000), design=designMF45, family = poisson)
+(exp(ipw_c5[[1]]+c(-1,1)*sqrt(diag(vcov(ipw_c5)))*1.96))
+(exp(ipw_c5[[1]]))
+
+ps2_no=ps2_all |> filter(type=="fu_no")
+designMF48 = twophase(id=list(~1,~1),weights=list(~1,~w_est), data=ps2_no,subset=~V==1,method="approx")
+ipw_c8 = svyglm(ef ~ 1, offset = log(fu/365.25/1000), design=designMF48, family = poisson)
+(exp(ipw_c8[[1]]+c(-1,1)*sqrt(diag(vcov(ipw_c8)))*1.96))
+(exp(ipw_c8[[1]]))
+
+
+
+ps2_over_90=ps2_all |> filter(type %in% c("fu_over_90","fu_under_90"))
+designMF47 = twophase(id=list(~1,~1),weights=list(~1,~w_est), data=ps2_over_90,subset=~V==1,method="approx")
+ipw_c7 = svyglm(ef ~ 1, offset = log(fu/365.25/1000), design=designMF47, family = poisson)
+(exp(ipw_c7[[1]]+c(-1,1)*sqrt(diag(vcov(ipw_c7)))*1.96))
+(exp(ipw_c7[[1]]))
+
+
+designMF47 = twophase(id=list(~1,~1),weights=list(~1,~w_est), data=ps2_all,subset=~V==1,method="approx")
+ipw_c7 = svyglm(ef ~ 1, offset = log(fu/365.25/1000), design=designMF47, family = poisson)
+(exp(ipw_c7[[1]]+c(-1,1)*sqrt(diag(vcov(ipw_c7)))*1.96))
+(exp(ipw_c7[[1]]))
+
+patients_sum_ea = d_inc_cw |> filter(V==1 & program==1) |> group_by(patient,art_final,V) |> dplyr::summarise(fu=sum(fu),event_final=max(event_final))
+
+ps1_art_ea=patients_sum_ea[patients_sum_ea$art_final==1,]|> inner_join(unique(d_inc_cw[,c('patient','strata','w_est')]),join_by(patient))|> mutate(V=1)
+
+
+designMF41 = twophase(id=list(~1,~1),weights=list(~1,~w_est), data=ps1_art_ea,subset=~V==1,method="approx")
+ipw_c1 = svyglm(event_final ~ 1, offset = log(fu/1000), design=designMF41, family = poisson)
+(exp(ipw_c1[[1]]+c(-1,1)*sqrt(diag(vcov(ipw_c1)))*1.96))
+(overall_inc_est=exp(ipw_c1[[1]]))
+
+
+
+
+
+ch1_1=d_inc_cw |> filter(V==1 & program==1 & art_final==0 & patient %in% ch1_2$patient) 
+
+ch1_1=d_inc_cw |> filter(V==1 & program==1 & art_final==0) 
+
+ch1_2=d_inc_cw |> filter(program==1 & art==0) 
+
+
+ch1_1=d_inc_cw |> filter(V==0 & program==0) 
+
+
+
+
+ps2_all=ps2 |> filter(fu>0) |> mutate(type = factor(type, levels = c("fu_no", "fu_under_90", "fu_over_90")))
+
+
+mod_ehr_inc2 = glm(ef ~ 1,offset = log(fu/1000),data= ps2_all[ps2_all$type=="fu_under_90",], family = poisson)
+
+
+  #### Raking
+  IF_func <- function(fit){
+    MM <- model.matrix(fit)
+    Score.P   <- fit$y*MM - MM*exp(fit$linear.predictors)
+    InfoMat.P <- t(MM*sqrt(exp(fit$linear.predictors))) %*% (MM*sqrt(exp(fit$linear.predictors)))/nrow(MM)
+    inffunc <- (Score.P) %*% solve(InfoMat.P)
+    inffunc
+  }    
+naiveInfl3 =  IF_func(mod_ehr_inc2)
+colnames(naiveInfl3)=paste("INF", 1:ncol(naiveInfl3), sep="")
+
+d14=cbind(ps2_all[ps2_all$type=="fu_under_90",],naiveInfl3) 
+
+ch33=ps2_all_1[ps2_all_1$type=="fu_under_90",]
+
+
+d14  |> filter(patient %in% ch33$patient) |> View()
+
+
+infs_eq1 <- as.formula(paste('~', paste0('INF', 1:ncol(naiveInfl3), collapse = ' + ')))
+designMF4 = twophase(id=list(~1,~1),weights=list(~1,~w_est), data=d14,subset=~V==1 & art_final==0,method="approx")
+Ninflcal3<-calibrate(designMF4,formula=infs_eq1,phase=2,calfun="raking") 
+fit_gr_inc_2 = svyglm(event_final ~ 1, offset = log(fu/1000), design=designMF4, family = poisson)
+
+(exp(fit_gr_inc_2[[1]]+c(-1,1)*sqrt(diag(vcov(fit_gr_inc_2)))*1.96))
+(exp(fit_gr_inc_2[[1]]))
+
+```
+
+```{r}
+
+### Weighted phase-2
+
+#########################################################################################################################
+#### CCASAnet: Incidence while off ART, first 90 days on ART, and after 90 days on ART
+
+ps = d_inc_cw |> filter(V==1 & program==0)  |> mutate(min_fu=date,max_fu=as.Date(date+fu*365.25-1))  |> left_join(d1[,c("patient","recart_d_final")]) |> group_by(patient,art_final,recart_d_final) |> dplyr::summarise(event_final=max(event_final),fu=sum(fu)*365.25,min_fu=min(min_fu),max_fu=max(max_fu))
+
+### Create variables for not on ART, ART <= 90 days, and ART > 90 days using if_else
+ps1 = ps |> mutate(fu_no=if_else(art_final==0,fu,0),fu_under_90=if_else(art_final==1 & min_fu-recart_d_final>90,0,if_else(art_final==1 &  min_fu-recart_d_final<=90 & min_fu-recart_d_final>0,as.numeric(min_fu-recart_d_final),if_else(art_final==1 & min_fu==recart_d_final,min(as.numeric(max_fu-recart_d_final+1),90),if_else(art_final==1 & recart_d_final-min_fu<=90 & recart_d_final-min_fu>0,as.numeric(recart_d_final-min_fu+1),0))))) |> group_by(patient) |> summarise(art_final=max(art_final),event_final=max(event_final),fu=sum(fu),fu_no=max(fu_no),fu_under_90=max(fu_under_90)) |> mutate(fu_over_90=round(as.numeric(fu-fu_no-fu_under_90),4))
+
+ps2 = ps1 |>  mutate(fu=NULL) |> pivot_longer(
+    cols = c(fu_no,fu_under_90,fu_over_90), 
+    names_to = "type",
+    values_to = "fu") |> group_by(patient) |> mutate(ef=if_else(event_final==0,0,if_else(event_final==1 & row_number()==1 & lead(fu,1)==0 & lead(fu,2)==0,1,if_else(event_final==1 & row_number()==2 & lead(fu,1)==0 & fu>0,1,if_else(event_final==1 & row_number()==3 & fu>0,1,0))))) 
+
+ps2_all=ps2 |> inner_join(unique(d_inc_cw[,c('patient','strata','w_est')]),join_by(patient))|> mutate(V=1) |> filter(fu>0) |> mutate(type = factor(type, levels = c("fu_no", "fu_under_90", "fu_over_90")))
+
+
+
+ps2_j = ps1 |>  mutate(fu=NULL) |> pivot_longer(
+    cols = c(fu_no,fu_under_90,fu_over_90), 
+    names_to = "type",
+    values_to = "fu_final") |> group_by(patient) |> mutate(ef_final=if_else(event_final==0,0,if_else(event_final==1 & row_number()==1 & lead(fu_final,1)==0 & lead(fu_final,2)==0,1,if_else(event_final==1 & row_number()==2 & lead(fu_final,1)==0 & fu_final>0,1,if_else(event_final==1 & row_number()==3 & fu_final>0,1,0)))))
+
+ps2_3= ps2_1 |> left_join(ps2_j[,c("patient","type","fu_final","ef_final")]) |> mutate(V=if_else(!is.na(ef_final),1,0)) |> inner_join(unique(d_inc_cw[,c('patient','strata','w_est')]),join_by(patient))
+
+
+
+mod_inc3_cn = glm(ef ~ type,offset = log(fu/365.25/1000),data= ps2_3[ps2_3$fu>0,] , family = poisson) 
+
+naiveInfl3_ea =  IF_func(mod_inc3_cn)
+colnames(naiveInfl3_ea)=paste("INF", 1:ncol(naiveInfl3_ea), sep="")
+
+d14_ea=cbind(ps2_3[ps2_3$fu>0,],naiveInfl3_ea) 
+
+infs_eq1_ea <- as.formula(paste('~', paste0('INF', 1:ncol(naiveInfl3_ea), collapse = ' + ')))
+designMF4_ea = twophase(id=list(~1,~1),weights=list(~1,~w_est), data=d14_ea,subset=~V==1,method="approx")
+Ninflcal3_ea<-calibrate(designMF4_ea,formula=infs_eq1_ea,phase=2,calfun="raking") 
+fit_gr_inc_2_cn = svyglm(ef_final ~ type, offset = log(fu_final/365.25/1000), design=Ninflcal3_ea, family = poisson)
+
+
+vcovs=vcov(fit_gr_inc_2_cn)
+vcovs1=c(vcovs[1,],vcovs[2,],vcovs[3,])
+names(vcovs1)=NULL
+vcovs2=matrix(vcovs1,nrow=3,ncol=3)
+
+exp(lincom.R(par=c(1,3),mults=c(1,1),coefs = coef(fit_gr_inc_2_cn),vcov=vcovs2,N=dim(ps2_all)[1]))
+
+exp(lincom.R(par=c(1,2),mults=c(1,1),coefs = coef(fit_gr_inc_2_cn),vcov=vcovs2,N=dim(ps2_all)[1]))
+
+
+(exp(fit_gr_inc_2_cn[[1]][[1]]+c(-1,1)*sqrt(diag(vcov(fit_gr_inc_2_cn))[[1]])*1.96))
+(exp(fit_gr_inc_2_cn[[1]][[1]]))
+
+designMF47 = twophase(id=list(~1,~1),weights=list(~1,~w_est), data=ps2_all,subset=~V==1,method="approx")
+ipw_c7 = svyglm(ef ~ type, offset = log(fu/365.25/1000), design=designMF47, family = poisson)
+
+
+
+
+designMF47 = twophase(id=list(~1,~1),weights=list(~1,~w_est), data=ps2_all,subset=~V==1,method="approx")
+ipw_c7 = svyglm(ef ~ 1, offset = log(fu/365.25/1000), design=designMF47, family = poisson)
+(exp(ipw_c7[[1]]+c(-1,1)*sqrt(diag(vcov(ipw_c7)))*1.96))
+(exp(ipw_c7[[1]]))
+
+
+designMF45 = twophase(id=list(~1,~1),weights=list(~1,~w_est), data=ps2_all,subset=~V==1,method="approx")
+ipw_c5 = svyglm(ef ~ type, offset = log(fu/365.25/1000), design=designMF45, family = poisson)
+(exp(ipw_c5[[1]]+c(-1,1)*sqrt(diag(vcov(ipw_c5)))*1.96))
+(exp(ipw_c5[[1]]))
+
+
+
+ps2_under_90=ps2_all |> filter(type=="fu_under_90")
+designMF46 = twophase(id=list(~1,~1),weights=list(~1,~w_est), data=ps2_under_90,subset=~V==1,method="approx")
+ipw_c6 = svyglm(ef ~ 1, offset = log(fu/365.25/1000), design=designMF46, family = poisson)
+(exp(ipw_c6[[1]]+c(-1,1)*sqrt(diag(vcov(ipw_c6)))*1.96))
+(exp(ipw_c6[[1]]))
+
+ps2_over_90=ps2_all |> filter(type=="fu_over_90")
+designMF47 = twophase(id=list(~1,~1),weights=list(~1,~w_est), data=ps2_over_90,subset=~V==1,method="approx")
+ipw_c7 = svyglm(ef ~ 1, offset = log(fu/365.25/1000), design=designMF47, family = poisson)
+(exp(ipw_c7[[1]]+c(-1,1)*sqrt(diag(vcov(ipw_c7)))*1.96))
+(exp(ipw_c7[[1]]))
+
+ps2_no=ps2_all |> filter(type=="fu_no")
+designMF48 = twophase(id=list(~1,~1),weights=list(~1,~w_est), data=ps2_no,subset=~V==1,method="approx")
+ipw_c8 = svyglm(ef ~ 1, offset = log(fu/365.25/1000), design=designMF48, family = poisson)
+(exp(ipw_c8[[1]]+c(-1,1)*sqrt(diag(vcov(ipw_c8)))*1.96))
+(exp(ipw_c8[[1]]))
+
+ps2_over_90=ps2_all |> filter(type %in% c("fu_over_90","fu_under_90"))
+designMF47 = twophase(id=list(~1,~1),weights=list(~1,~w_est), data=ps2_over_90,subset=~V==1,method="approx")
+ipw_c7 = svyglm(ef ~ 1, offset = log(fu/365.25/1000), design=designMF47, family = poisson)
+(exp(ipw_c7[[1]]+c(-1,1)*sqrt(diag(vcov(ipw_c7)))*1.96))
+(exp(ipw_c7[[1]]))
+
+designMF47 = twophase(id=list(~1,~1),weights=list(~1,~w_est), data=ps2_all,subset=~V==1,method="approx")
+ipw_c7 = svyglm(ef ~ type, offset = log(fu/365.25/1000), design=designMF47, family = poisson)
+(exp(ipw_c7[[1]][[1]]+c(-1,1)*sqrt(diag(vcov(ipw_c7))[[1]])*1.96))
+(exp(ipw_c7[[1]][[1]]))
+
+(exp(ipw_c7[[1]][[2]]+c(-1,1)*sqrt(diag(vcov(ipw_c7))[[2]])*1.96))
+(exp(ipw_c7[[1]][[2]]))
+
+(exp(ipw_c7[[1]]+c(-1,1)*sqrt(diag(vcov(ipw_c7)))*1.96))
+
+
+coef(ipw_c7)
+
+lincom.R <- function(par, mults, coefs, vcov, N, alpha = 0.05) { 
+R <- matrix(0, nrow = 1, ncol = length(coefs))
+
+for (q in 1:length(par)) 
+  {R[1,par[q]] <- mults[q]}
+w <- sqrt(as.numeric(t(R %*% coefs) %*% solve(R %*% vcov %*% t(R)) %*% (R %*% coefs)))
+p <- 2*(1 - pt(w, df = N - length(coefs)))
+Est <- R %*% coefs
+tol <- qt(1 - alpha/2, df = N - length(coefs))
+CI.Lo <- R %*% coefs - tol*sqrt(R %*% vcov %*% t(R)) 
+CI.Hi <- R %*% coefs + tol*sqrt(R %*% vcov %*% t(R)) 
+
+return(c(EST = Est, CI.LO = CI.Lo, CI.HI = CI.Hi, P = p))
+}
+
+vcovs=vcov(ipw_c7)
+vcovs1=remove_attributes(vcovs, attributes)
+
+vcovs1=c(vcovs[1,],vcovs[2,],vcovs[3,])
+names(vcovs1)=NULL
+vcovs2=matrix(vcovs1,nrow=3,ncol=3)
+
+exp(lincom.R(par=c(1,3),mults=c(1,1),coefs = coef(ipw_c7),vcov=vcovs2,N=dim(ps2_all)[1]))
+
+
+patients_sum_cn = d_inc_cw |> filter(V==1 & program==0) |> group_by(patient,art_final,V) |> dplyr::summarise(fu=sum(fu),event_final=max(event_final))
+
+ps1_art_cn=patients_sum_cn[patients_sum_cn$art_final==1,]|> inner_join(unique(d_inc_cw[,c('patient','strata','w_est')]),join_by(patient))|> mutate(V=1)
+
+
+designMF41 = twophase(id=list(~1,~1),weights=list(~1,~w_est), data=ps1_art_cn,subset=~V==1,method="approx")
+ipw_c1 = svyglm(event_final ~ 1, offset = log(fu/1000), design=designMF41, family = poisson)
+(exp(ipw_c1[[1]]+c(-1,1)*sqrt(diag(vcov(ipw_c1)))*1.96))
+(overall_inc_est=exp(ipw_c1[[1]]))
+```
+
+```{r}
+
+
+##############################################################################################################################
+##############################################################################################################################
+
+#### Overall unadjusted GR weighted incidence among different groups ####
+
+##############################################################################################################################
+##############################################################################################################################
+
+### overall
+
+mod_ehr_inc2 = glm(event ~ 1,offset = log(fu/1000),data= d_inc_cw, family = poisson) 
+
+
+
+naiveInfl3 =  IF_func(mod_ehr_inc2)
+colnames(naiveInfl3)=paste("INF", 1:ncol(naiveInfl3), sep="")
+
+d14=cbind(d_inc_cw,naiveInfl3) 
+
+infs_eq1 <- as.formula(paste('~', paste0('INF', 1:ncol(naiveInfl3), collapse = ' + ')))
+designMF4 = twophase(id=list(~1,~1),weights=list(~1,~w_est),strata=list(NULL,~strata), data=d14,subset=~V==1,method="approx")
+Ninflcal3<-calibrate(designMF4,formula=infs_eq1,phase=2,calfun="raking") 
+fit_gr_inc_2 = svyglm(event_final ~ 1, offset = log(fu/1000), design=Ninflcal3, family = poisson)
+
+overall_inc_ci=exp(fit_gr_inc_2[[1]]+c(-1,1)*sqrt(diag(vcov(fit_gr_inc_2)))*1.96)
+overall_inc_est=exp(fit_gr_inc_2[[1]])
+
+
+(exp(fit_gr_inc_2_ea[[1]]+c(-1,1)*sqrt(diag(vcov(fit_gr_inc_2_ea)))*1.96))
+(exp(fit_gr_inc_2_ea[[1]]))
+
+################################################################################################################################
+################################################################################################################################
+
+
+### East Africa
+
+mod_ehr_inc2_ea = glm(event ~ 1,offset = log(fu/1000),data= d_inc_cw[d_inc_cw$program==1,], family = poisson) 
+
+naiveInfl3_ea =  IF_func(mod_ehr_inc2_ea)
+colnames(naiveInfl3_ea)=paste("INF", 1:ncol(naiveInfl3_ea), sep="")
+
+d14_ea=cbind(d_inc_cw[d_inc_cw$program==1,],naiveInfl3_ea) 
+
+infs_eq1_ea <- as.formula(paste('~', paste0('INF', 1:ncol(naiveInfl3_ea), collapse = ' + ')))
+designMF4_ea = twophase(id=list(~1,~1),weights=list(~1,~w_est), data=d14_ea,subset=~V==1,method="approx")
+Ninflcal3_ea<-calibrate(designMF4_ea,formula=infs_eq1_ea,phase=2,calfun="raking") 
+fit_gr_inc_2_ea = svyglm(event_final ~ 1, offset = log(fu/1000), design=Ninflcal3_ea, family = poisson)
+
+ea_inc_ci=exp(fit_gr_inc_2_ea[[1]]+c(-1,1)*sqrt(diag(vcov(fit_gr_inc_2_ea)))*1.96)
+ea_inc_est=exp(fit_gr_inc_2_ea[[1]])
+
+(exp(fit_gr_inc_2_ea[[1]]+c(-1,1)*sqrt(diag(vcov(fit_gr_inc_2_ea)))*1.96))
+(exp(fit_gr_inc_2_ea[[1]]))
+
+### East Africa GR before and after ART
+
+mod_ehr_inc2_ea = glm(event ~ 1,offset = log(fu/1000),data= d_inc_cw[d_inc_cw$program==1 & d_inc_cw$art==0,], family = poisson) 
+
+naiveInfl3_ea =  IF_func(mod_ehr_inc2_ea)
+colnames(naiveInfl3_ea)=paste("INF", 1:ncol(naiveInfl3_ea), sep="")
+
+d14_ea=cbind(d_inc_cw[d_inc_cw$program==1 & d_inc_cw$art==0,],naiveInfl3_ea) 
+
+infs_eq1_ea <- as.formula(paste('~', paste0('INF', 1:ncol(naiveInfl3_ea), collapse = ' + ')))
+designMF4_ea = twophase(id=list(~1,~1),weights=list(~1,~w_est), data=d14_ea,subset=~V==1 & art_final==0,method="approx")
+Ninflcal3_ea<-calibrate(designMF4_ea,formula=infs_eq1_ea,phase=2,calfun="raking") 
+fit_gr_inc_2_ea = svyglm(event_final ~ 1, offset = log(fu/1000), design=Ninflcal3_ea, family = poisson)
+
+
+(exp(fit_gr_inc_2_ea[[1]]+c(-1,1)*sqrt(diag(vcov(fit_gr_inc_2_ea)))*1.96))
+(exp(fit_gr_inc_2_ea[[1]]))
+
+### Latin America
+
+mod_ehr_inc2_cn = glm(event ~ 1,offset = log(fu/1000),data= d_inc_cw[d_inc_cw$program==0,], family = poisson) 
+
+naiveInfl3_cn =  IF_func(mod_ehr_inc2_cn)
+colnames(naiveInfl3_cn)=paste("INF", 1:ncol(naiveInfl3_cn), sep="")
+
+d14_cn=cbind(d_inc_cw[d_inc_cw$program==0,],naiveInfl3_cn) 
+
+infs_eq1_cn <- as.formula(paste('~', paste0('INF', 1:ncol(naiveInfl3_cn), collapse = ' + ')))
+designMF4_cn = twophase(id=list(~1,~1),weights=list(~1,~w_est), data=d14_cn,subset=~V==1,method="approx")
+Ninflcal3_cn<-calibrate(designMF4_cn,formula=infs_eq1_cn,phase=2,calfun="raking") 
+fit_gr_inc_2_cn = svyglm(event_final ~ 1, offset = log(fu/1000), design=Ninflcal3_cn, family = poisson)
+
+cn_inc_ci=exp(fit_gr_inc_2_cn[[1]]+c(-1,1)*sqrt(diag(vcov(fit_gr_inc_2_cn)))*1.96)
+cn_inc_est=exp(fit_gr_inc_2_cn[[1]])
+
+
+
+### Latin America GR before and after ART
+
+mod_ehr_inc2_cn = glm(event ~ 1,offset = log(fu/1000),data= d_inc_cw[d_inc_cw$program==0 & d_inc_cw$art==1,], family = poisson) 
+
+naiveInfl3_cn =  IF_func(mod_ehr_inc2_cn)
+colnames(naiveInfl3_cn)=paste("INF", 1:ncol(naiveInfl3_cn), sep="")
+
+d14_cn=cbind(d_inc_cw[d_inc_cw$program==0 & d_inc_cw$art==1,],naiveInfl3_cn) 
+
+infs_eq1_cn <- as.formula(paste('~', paste0('INF', 1:ncol(naiveInfl3_cn), collapse = ' + ')))
+designMF4_cn = twophase(id=list(~1,~1),weights=list(~1,~w_est), data=d14_cn,subset=~V==1 & art_final==1,method="approx")
+Ninflcal3_cn<-calibrate(designMF4_cn,formula=infs_eq1_cn,phase=2,calfun="raking") 
+fit_gr_inc_2_cn = svyglm(event_final ~ 1, offset = log(fu/1000), design=designMF4_cn, family = poisson)
+
+(exp(fit_gr_inc_2_cn[[1]]+c(-1,1)*sqrt(diag(vcov(fit_gr_inc_2_cn)))*1.96))
+(exp(fit_gr_inc_2_cn[[1]]))
+
+```
+
+
+
+```{r}
+
+##############################################################################################################
+### Categorical year EHR
+
+mod_ehr_categorical = glm(event ~ as.factor(year),offset = log(fu/1000),data= d_inc_cw, family = poisson) 
+
+betas_ehr_categorical <- mod_ehr_categorical$coefficients[-1]
+  
+res_ehr_categorical<- exp(cbind(betas_ehr_categorical, betas_ehr_categorical - 1.96*(sqrt(diag(vcov(mod_ehr_categorical))[-1])), betas_ehr_categorical + 1.96*(sqrt(diag(vcov(mod_ehr_categorical))[-1]))))
+
+###############################################################################################################
+## Linear year EHR
+
+mod_ehr_linear = glm(event ~ I(year-2010),offset = log(fu/1000),data= d_inc_cw, family = poisson) 
+
+betas_ehr_linear <- mod_ehr_linear$coefficients[-1]
+  
+res_ehr_linear<- exp(cbind(betas_ehr_linear, betas_ehr_linear - 1.96*(sqrt(diag(vcov(mod_ehr_linear))[-1])), betas_ehr_linear + 1.96*(sqrt(diag(vcov(mod_ehr_linear))[-1]))))
+
+###############################################################################################################
+## Linear year EHR interaction
+
+mod_ehr_linear_int = glm(event ~ program*I(year-2010),offset = log(fu/1000),data= d_inc_cw, family = poisson) 
+
+betas_ehr_linear <- mod_ehr_linear$coefficients[-1]
+  
+res_ehr_linear<- exp(cbind(betas_ehr_linear, betas_ehr_linear - 1.96*(sqrt(diag(vcov(mod_ehr_linear))[-1])), betas_ehr_linear + 1.96*(sqrt(diag(vcov(mod_ehr_linear))[-1]))))
+
+
+###############################################################################################################
+## Linear year EHR EA
+
+mod_ehr_linear = glm(event ~ I(year-2010),offset = log(fu/1000),data= d_inc_cw[d_inc_cw$program==1,], family = poisson) 
+
+betas_ehr_linear <- mod_ehr_linear$coefficients[-1]
+  
+res_ehr_linear<- exp(cbind(betas_ehr_linear, betas_ehr_linear - 1.96*(sqrt(diag(vcov(mod_ehr_linear))[-1])), betas_ehr_linear + 1.96*(sqrt(diag(vcov(mod_ehr_linear))[-1]))))
+
+###############################################################################################################
+## Linear year EHR LA
+
+mod_ehr_linear = glm(event ~ I(year-2010),offset = log(fu/1000),data= d_inc_cw[d_inc_cw$program==0,], family = poisson) 
+
+betas_ehr_linear <- mod_ehr_linear$coefficients[-1]
+  
+res_ehr_linear<- exp(cbind(betas_ehr_linear, betas_ehr_linear - 1.96*(sqrt(diag(vcov(mod_ehr_linear))[-1])), betas_ehr_linear + 1.96*(sqrt(diag(vcov(mod_ehr_linear))[-1]))))
+
+##############################################################################################################
+### Linear year IPW
+
+
+designMF4 = twophase(id=list(~1,~1),weights=list(~1,~w_est),strata=list(NULL,~strata), data=d_inc_cw,subset=~V==1,method="approx")
+
+mod_ipw_linear = svyglm(event_final ~ I(year-2010), offset = log(fu/1000), design=designMF4, family = poisson)
+
+betas_ipw_linear <- mod_ipw_linear$coefficients[-1]
+  
+res_ipw_linear<- exp(cbind(betas_ipw_linear, betas_ipw_linear - 1.96*(sqrt(diag(vcov(mod_ipw_linear))[-1])), betas_ipw_linear + 1.96*(sqrt(diag(vcov(mod_ipw_linear))[-1]))))
+
+################################################################################################################# 
+##Categorical year IPW
+
+
+designMF4 = twophase(id=list(~1,~1),weights=list(~1,~w_est),strata=list(NULL,~strata), data=d_inc_cw,subset=~V==1,method="approx")
+
+mod_ipw_cat = svyglm(event_final ~ as.factor(year), offset = log(fu/1000), design=designMF4, family = poisson)
+
+betas_ipw_cat <- mod_ipw_cat$coefficients[-1]
+  
+res_ipw_cat<- exp(cbind(betas_ipw_cat, betas_ipw_cat - 1.96*(sqrt(diag(vcov(mod_ipw_cat))[-1])), betas_ipw_cat + 1.96*(sqrt(diag(vcov(mod_ipw_cat))[-1]))))
+
+
+### Trying IPW for all, not only overalpping timeframes
+# 
+# d6_val$V=1
+# 
+# 
+# pb2 = pb2 |> mutate(w_est = 1/(p_est_overall*p_est))
+# 
+# d_inc_val = d6_val |> left_join(pb2[,c('patient','w_est','strata')],by="patient") |> mutate(age_final=round(as.numeric(age_final/365.25),3),fu=fu/365.25) |> filter(!is.na(w_est))
+# 
+# designMF5 = twophase(id=list(~1,~1),weights=list(~1,~w_est),strata=list(NULL,~strata), data=d_inc_val,subset=~V==1,method="approx")
+# 
+# #d6_val |> filter(patient %in% d_inc_val$patient) |> View()
+# 
+# mod_ipw_linear = svyglm(event_final ~ I(year-2010), offset = log(fu/1000), design=designMF5, family = poisson)
+# 
+# betas_ipw_linear <- mod_ipw_linear$coefficients[-1]
+#   
+# res_ipw_linear<- exp(cbind(betas_ipw_linear, betas_ipw_linear - 1.96*(sqrt(diag(vcov(mod_ipw_linear))[-1])), betas_ipw_linear + 1.96*(sqrt(diag(vcov(mod_ipw_linear))[-1]))))
+
+
+
+################################################################################################################# 
+## Linear year GR
+
+IFs =  IF_func(mod_ehr_linear)
+colnames(IFs)=paste("INF", 1:ncol(IFs), sep="")
+
+d14=cbind(d_inc_cw,IFs) 
+
+infs_eq1 <- as.formula(paste('~', paste0('INF', 1:ncol(IFs), collapse = ' + ')))
+designMF4 = twophase(id=list(~1,~1),weights=list(~1,~w_est),strata=list(NULL,~strata), data=d14,subset=~V==1,method="approx")
+Ninflcal3<-calibrate(designMF4,formula=infs_eq1,phase=2,calfun="raking") 
+mod_gr_linear = svyglm(event_final ~ I(year-2010), offset = log(fu/1000), design=Ninflcal3, family = poisson)
+
+betas_gr_linear <- mod_gr_linear$coefficients[-1]
+  
+res_gr_linear<- exp(cbind(betas_gr_linear, betas_gr_linear - 1.96*(sqrt(diag(vcov(mod_gr_linear))[-1])), betas_gr_linear + 1.96*(sqrt(diag(vcov(mod_gr_linear))[-1]))))
+
+
+################################################################################################################# 
+## Linear year GR interaction
+
+IFs =  IF_func(mod_ehr_linear_int)
+colnames(IFs)=paste("INF", 1:ncol(IFs), sep="")
+
+d14=cbind(d_inc_cw,IFs) 
+
+infs_eq1 <- as.formula(paste('~', paste0('INF', 1:ncol(IFs), collapse = ' + ')))
+designMF4 = twophase(id=list(~1,~1),weights=list(~1,~w_est),strata=list(NULL,~strata), data=d14,subset=~V==1,method="approx")
+Ninflcal3<-calibrate(designMF4,formula=infs_eq1,phase=2,calfun="raking") 
+mod_gr_linear_int = svyglm(event_final ~ program*I(year-2010), offset = log(fu/1000), design=Ninflcal3, family = poisson)
+
+betas_gr_linear <- mod_gr_linear$coefficients[-1]
+  
+res_gr_linear<- exp(cbind(betas_gr_linear, betas_gr_linear - 1.96*(sqrt(diag(vcov(mod_gr_linear))[-1])), betas_gr_linear + 1.96*(sqrt(diag(vcov(mod_gr_linear))[-1]))))
+
+### ART * region interaction results GR
+
+##### calculate p-value for interaction
+
+2*(1-pnorm( abs(-0.089085230 /0.61064508)))
+
+################################################################################################################# 
+## Linear year GR EA
+
+mod_ehr_linear = glm(event ~ I(year-2010),offset = log(fu/1000),data= d_inc_cw[d_inc_cw$program==1,], family = poisson) 
+
+IFs =  IF_func(mod_ehr_linear)
+colnames(IFs)=paste("INF", 1:ncol(IFs), sep="")
+
+d14=cbind(d_inc_cw[d_inc_cw$program==1,],IFs) 
+
+infs_eq1 <- as.formula(paste('~', paste0('INF', 1:ncol(IFs), collapse = ' + ')))
+designMF4 = twophase(id=list(~1,~1),weights=list(~1,~w_est),strata=list(NULL,~strata), data=d14,subset=~V==1,method="approx")
+Ninflcal3<-calibrate(designMF4,formula=infs_eq1,phase=2,calfun="raking") 
+mod_gr_linear = svyglm(event_final ~ I(year-2010), offset = log(fu/1000), design=Ninflcal3, family = poisson)
+
+betas_gr_linear <- mod_gr_linear$coefficients[-1]
+  
+res_gr_linear<- exp(cbind(betas_gr_linear, betas_gr_linear - 1.96*(sqrt(diag(vcov(mod_gr_linear))[-1])), betas_gr_linear + 1.96*(sqrt(diag(vcov(mod_gr_linear))[-1]))))
+
+################################################################################################################# 
+## Linear year GR LA
+
+mod_ehr_linear = glm(event ~ I(year-2010),offset = log(fu/1000),data= d_inc_cw[d_inc_cw$program==0,], family = poisson) 
+
+IFs =  IF_func(mod_ehr_linear)
+colnames(IFs)=paste("INF", 1:ncol(IFs), sep="")
+
+d14=cbind(d_inc_cw[d_inc_cw$program==0,],IFs) 
+
+infs_eq1 <- as.formula(paste('~', paste0('INF', 1:ncol(IFs), collapse = ' + ')))
+designMF4 = twophase(id=list(~1,~1),weights=list(~1,~w_est),strata=list(NULL,~strata), data=d14,subset=~V==1,method="approx")
+Ninflcal3<-calibrate(designMF4,formula=infs_eq1,phase=2,calfun="raking") 
+mod_gr_linear = svyglm(event_final ~ I(year-2010), offset = log(fu/1000), design=Ninflcal3, family = poisson)
+
+betas_gr_linear <- mod_gr_linear$coefficients[-1]
+  
+res_gr_linear<- exp(cbind(betas_gr_linear, betas_gr_linear - 1.96*(sqrt(diag(vcov(mod_gr_linear))[-1])), betas_gr_linear + 1.96*(sqrt(diag(vcov(mod_gr_linear))[-1]))))
+
+```
+
+
+
+```{r}
+
+### Plotting unadjusted phase-1 incidence trends over time
+
+##############################################################################################################
+### Spline year EHR
+
+library(splines)
+mod_ehr_spline = glm(event ~ ns(I(year-2010),df=4),offset = log(fu/1000),data= d_inc_cw, family = poisson) 
+
+pred <- as.data.frame(predict(mod_ehr_spline, data.frame(year =seq(2010,2018,0.1),fu=1),se.fit=T))
+
+names(pred)=c("link","SE")
+
+pred$year <- seq(2010,2018,0.1)
+#pred$year_final <- 2010:2018
+pred$inc= exp(pred$link)*1000
+
+pred$ci_low=exp(pred$link-pred$SE*1.96)*1000
+pred$ci_high=exp(pred$link+pred$SE*1.96)*1000
+
+#mod_eh2 = glm(event ~ 1,offset = log(fu/1000),data= d_inc_cw[d_inc_cw$year==2011,], family = poisson) 
+
+
+##########################################################################################################
+##############################################################################################################
+### Categorical year EHR
+
+mod_ehr_categorical = glm(event ~ as.factor(year),offset = log(fu/1000),data= d_inc_cw, family = poisson) 
+
+log_rates=c(coef(mod_ehr_categorical)[[1]],coef(mod_ehr_categorical)[[1]]+coef(mod_ehr_categorical)[[2]],coef(mod_ehr_categorical)[[1]]+coef(mod_ehr_categorical)[[3]],coef(mod_ehr_categorical)[[1]]+coef(mod_ehr_categorical)[[4]],coef(mod_ehr_categorical)[[1]]+coef(mod_ehr_categorical)[[5]],coef(mod_ehr_categorical)[[1]]+coef(mod_ehr_categorical)[[6]],coef(mod_ehr_categorical)[[1]]+coef(mod_ehr_categorical)[[7]],coef(mod_ehr_categorical)[[1]]+coef(mod_ehr_categorical)[[8]],coef(mod_ehr_categorical)[[1]]+coef(mod_ehr_categorical)[[9]])
+
+inc_probs=exp(log_rates)
+
+ci_up=exp(log_rates+sqrt(diag(vcov(mod_ehr_categorical))[-10])*1.96)
+ci_low=exp(log_rates-sqrt(diag(vcov(mod_ehr_categorical))[-10])*1.96)
+
+inc2= data.frame(Years=2010:2018,Incidence=round(inc_probs,3),CI_lower=round(ci_low,3),CI_upper=round(ci_up,3))
+
+library(ggplot2)
+ggplot(data=inc2, aes(x=Years, y=Incidence, group=1)) + geom_line(data=inc2)+geom_point(data=inc2) +  geom_errorbar(data=inc2,aes(ymin = CI_lower, ymax = CI_upper),width=.1) +
+    geom_line(data=pred, aes(x=year,y=inc), color="blue") +
+    geom_ribbon(data=pred,aes(x=year,y=inc,ymin = ci_low, ymax = ci_high), alpha = 0.4) + labs(x = "Calendar year", y = "Incidence rate") 
+
+pdf("/Users/joshslone/Desktop/PhD/Research/KS_paper/incidence_over_time.pdf",width = 7,height=5)
+
+ggplot(data=inc2, aes(x=Years, y=Incidence, group=1)) + geom_line(data=inc2)+geom_point(data=inc2) +  geom_errorbar(data=inc2,aes(ymin = CI_lower, ymax = CI_upper),width=.1) +
+    geom_line(data=pred, aes(x=year,y=inc), color="blue") +
+    geom_ribbon(data=pred,aes(x=year,y=inc,ymin = ci_low, ymax = ci_high), alpha = 0.4) + labs(x = "Calendar year", y = "Incidence rate") 
+
+dev.off() #turn off develop
+
+
+
+```
+
+
+```{r}
+
+### Plotting unadjusted phase-1 incidence trends over time EA
+
+##############################################################################################################
+### Spline year EHR
+
+library(splines)
+
+mod_ehr_spline = glm(event ~ ns(I(year-2010),df=4),offset = log(fu/100000),data= d_inc_cw[d_inc_cw$program==1,], family = poisson) 
+
+
+
+pred <- as.data.frame(predict(mod_ehr_spline, data.frame(year =seq(2010,2018,0.1),fu=1),se.fit=T))
+
+names(pred)=c("link","SE")
+
+pred$year <- seq(2010,2018,0.1)
+#pred$year_final <- 2010:2018
+pred$inc= exp(pred$link)*100000
+
+pred$ci_low=exp(pred$link-pred$SE*1.96)*100000
+pred$ci_high=exp(pred$link+pred$SE*1.96)*100000
+
+#mod_eh2 = glm(event ~ 1,offset = log(fu/1000),data= d_inc_cw[d_inc_cw$year==2011,], family = poisson) 
+
+
+##########################################################################################################
+##############################################################################################################
+### Categorical year EHR
+
+mod_ehr_categorical = glm(event ~ as.factor(year),offset = log(fu/100000),data= d_inc_cw[d_inc_cw$program==1,], family = poisson) 
+
+log_rates=c(coef(mod_ehr_categorical)[[1]],coef(mod_ehr_categorical)[[1]]+coef(mod_ehr_categorical)[[2]],coef(mod_ehr_categorical)[[1]]+coef(mod_ehr_categorical)[[3]],coef(mod_ehr_categorical)[[1]]+coef(mod_ehr_categorical)[[4]],coef(mod_ehr_categorical)[[1]]+coef(mod_ehr_categorical)[[5]],coef(mod_ehr_categorical)[[1]]+coef(mod_ehr_categorical)[[6]],coef(mod_ehr_categorical)[[1]]+coef(mod_ehr_categorical)[[7]],coef(mod_ehr_categorical)[[1]]+coef(mod_ehr_categorical)[[8]],coef(mod_ehr_categorical)[[1]]+coef(mod_ehr_categorical)[[9]])
+
+inc_probs=exp(log_rates)
+
+ci_up=exp(log_rates+sqrt(diag(vcov(mod_ehr_categorical))[-10])*1.96)
+ci_low=exp(log_rates-sqrt(diag(vcov(mod_ehr_categorical))[-10])*1.96)
+
+inc2= data.frame(Years=2010:2018,Incidence=round(inc_probs,3),CI_lower=round(ci_low,3),CI_upper=round(ci_up,3))
+
+library(ggplot2)
+ehr1=ggplot(data=inc2, aes(x=Years, y=Incidence, group=1)) + geom_line(data=inc2)+geom_point(data=inc2) +  geom_errorbar(data=inc2,aes(ymin = CI_lower, ymax = CI_upper),width=.1) +
+    geom_line(data=pred, aes(x=year,y=inc), color="blue") +
+    geom_ribbon(data=pred,aes(x=year,y=inc,ymin = ci_low, ymax = ci_high), alpha = 0.4) + labs(x = "Calendar year", y = "Incidence rate") +      theme(axis.title.x = element_blank())  +      theme(axis.title.y = element_blank()) +
+  coord_cartesian(ylim = c(0, 250))
+
+
+```
+
+
+
+```{r}
+
+### Plotting unadjusted phase-1 incidence trends over time LA
+
+##############################################################################################################
+### Spline year EHR
+
+library(splines)
+
+mod_ehr_spline = glm(event ~ ns(I(year-2010),df=4),offset = log(fu/100000),data= d_inc_cw[d_inc_cw$program==0,], family = poisson) 
+
+
+
+pred <- as.data.frame(predict(mod_ehr_spline, data.frame(year =seq(2010,2018,0.1),fu=1),se.fit=T))
+
+names(pred)=c("link","SE")
+
+pred$year <- seq(2010,2018,0.1)
+#pred$year_final <- 2010:2018
+pred$inc= exp(pred$link)*100000
+
+pred$ci_low=exp(pred$link-pred$SE*1.96)*100000
+pred$ci_high=exp(pred$link+pred$SE*1.96)*100000
+
+#mod_eh2 = glm(event ~ 1,offset = log(fu/1000),data= d_inc_cw[d_inc_cw$year==2011,], family = poisson) 
+
+
+##########################################################################################################
+##############################################################################################################
+### Categorical year EHR
+
+mod_ehr_categorical = glm(event ~ as.factor(year),offset = log(fu/100000),data= d_inc_cw[d_inc_cw$program==0,], family = poisson) 
+
+log_rates=c(coef(mod_ehr_categorical)[[1]],coef(mod_ehr_categorical)[[1]]+coef(mod_ehr_categorical)[[2]],coef(mod_ehr_categorical)[[1]]+coef(mod_ehr_categorical)[[3]],coef(mod_ehr_categorical)[[1]]+coef(mod_ehr_categorical)[[4]],coef(mod_ehr_categorical)[[1]]+coef(mod_ehr_categorical)[[5]],coef(mod_ehr_categorical)[[1]]+coef(mod_ehr_categorical)[[6]],coef(mod_ehr_categorical)[[1]]+coef(mod_ehr_categorical)[[7]],coef(mod_ehr_categorical)[[1]]+coef(mod_ehr_categorical)[[8]],coef(mod_ehr_categorical)[[1]]+coef(mod_ehr_categorical)[[9]])
+
+inc_probs=exp(log_rates)
+
+ci_up=exp(log_rates+sqrt(diag(vcov(mod_ehr_categorical))[-10])*1.96)
+ci_low=exp(log_rates-sqrt(diag(vcov(mod_ehr_categorical))[-10])*1.96)
+
+inc2= data.frame(Years=2010:2018,Incidence=round(inc_probs,3),CI_lower=round(ci_low,3),CI_upper=round(ci_up,3))
+
+library(ggplot2)
+ehr2=ggplot(data=inc2, aes(x=Years, y=Incidence, group=1)) + geom_line(data=inc2)+geom_point(data=inc2) +  geom_errorbar(data=inc2,aes(ymin = CI_lower, ymax = CI_upper),width=.1) +
+    geom_line(data=pred, aes(x=year,y=inc), color="blue") +
+    geom_ribbon(data=pred,aes(x=year,y=inc,ymin = ci_low, ymax = ci_high), alpha = 0.4) + labs(x = "Calendar year", y = "Incidence rate") +      theme(axis.title.x = element_blank())  +      theme(axis.title.y = element_blank())  +
+  coord_cartesian(ylim = c(0, 700))
+
+
+
+```
+
+
+```{r}
+###
+### GR by region
+
+mod_ehr_categorical = glm(event ~ as.factor(year),offset = log(fu/100000),data= d_inc_cw[d_inc_cw$program==1,], family = poisson) 
+
+
+mod_ehr_spline = glm(event ~ ns(I(year-2010),df=4),offset = log(fu/100000),data= d_inc_cw[d_inc_cw$program==1,], family = poisson) 
+
+
+
+naiveInfl3 =  IF_func(mod_ehr_categorical)
+colnames(naiveInfl3)=paste("INF", 1:ncol(naiveInfl3), sep="")
+
+d14=cbind(d_inc_cw[d_inc_cw$program==1,],naiveInfl3) 
+
+infs_eq1 <- as.formula(paste('~', paste0('INF', 1:ncol(naiveInfl3), collapse = ' + ')))
+designMF4 = twophase(id=list(~1,~1),weights=list(~1,~w_est),strata=list(NULL,~strata), data=d14,subset=~V==1,method="approx")
+Ninflcal3<-calibrate(designMF4,formula=infs_eq1,phase=2,calfun="raking") 
+mod_gr_categorical = svyglm(event_final ~ as.factor(year), offset = log(fu/100000), design=Ninflcal3, family = poisson)
+
+
+log_rates=c(coef(mod_gr_categorical)[[1]],coef(mod_gr_categorical)[[1]]+coef(mod_gr_categorical)[[2]],coef(mod_gr_categorical)[[1]]+coef(mod_gr_categorical)[[3]],coef(mod_gr_categorical)[[1]]+coef(mod_gr_categorical)[[4]],coef(mod_gr_categorical)[[1]]+coef(mod_gr_categorical)[[5]],coef(mod_gr_categorical)[[1]]+coef(mod_gr_categorical)[[6]],coef(mod_gr_categorical)[[1]]+coef(mod_gr_categorical)[[7]],coef(mod_gr_categorical)[[1]]+coef(mod_gr_categorical)[[8]],coef(mod_gr_categorical)[[1]]+coef(mod_gr_categorical)[[9]])
+
+inc_probs=exp(log_rates)
+
+ci_up=exp(log_rates+sqrt(diag(vcov(mod_gr_categorical))[-c(10)])*1.96)
+ci_low=exp(log_rates-sqrt(diag(vcov(mod_gr_categorical))[-c(10)])*1.96)
+
+inc2= data.frame(Years=2010:2018,Incidence=round(inc_probs,3),CI_lower=round(ci_low,3),CI_upper=round(ci_up,3))
+
+
+##############################################################################################################
+
+IFs =  IF_func(mod_ehr_spline)
+colnames(IFs)=paste("INF", 1:ncol(IFs), sep="")
+
+d14=cbind(d_inc_cw[d_inc_cw$program==1,],IFs) 
+
+infs_eq1 <- as.formula(paste('~', paste0('INF', 1:ncol(IFs), collapse = ' + ')))
+designMF4 = twophase(id=list(~1,~1),weights=list(~1,~w_est),strata=list(NULL,~strata), data=d14,subset=~V==1,method="approx")
+Ninflcal3<-calibrate(designMF4,formula=infs_eq1,phase=2,calfun="raking") 
+mod_gr_spline = svyglm(event_final ~ ns(I(year-2010),df=4), offset = log(fu/1000), design=Ninflcal3, family = poisson)
+
+pred <- as.data.frame(predict(mod_gr_spline, data.frame(year =seq(2010,2018.6,0.1),fu=1),se.fit=T))
+
+names(pred)=c("link","SE")
+
+pred$year <- seq(2010,2018.6,0.1)
+#pred$year_final <- 2010:2018
+pred$inc= exp(pred$link)*100
+
+pred$ci_low=exp(pred$link-pred$SE*1.96)*100
+pred$ci_high=exp(pred$link+pred$SE*1.96)*100
+
+pred=pred[1:(nrow(pred)-6),]
+
+library(ggplot2)
+gr1=ggplot(data=inc2, aes(x=Years, y=Incidence, group=1)) + geom_line(data=inc2)+geom_point(data=inc2) +  geom_errorbar(data=inc2,aes(ymin = CI_lower, ymax = CI_upper),width=.1) +
+    geom_line(data=pred, aes(x=year,y=inc), color="blue") +
+    geom_ribbon(data=pred,aes(x=year,y=inc,ymin = ci_low, ymax = ci_high), alpha = 0.4) + labs(x = "Calendar year", y = "Incidence rate") +      theme(axis.title.x = element_blank())  +      theme(axis.title.y = element_blank()) +
+  coord_cartesian(ylim = c(0, 250))
+
+#+  coord_cartesian(ylim = c(0, 1500))
+
+pdf("/Users/joshslone/Desktop/PhD/Research/KS_paper/incidence_gr_over_time_no_outliers_EA.pdf",width = 7,height=5)
+
+ggplot(data=inc2, aes(x=Years, y=Incidence, group=1)) + geom_line(data=inc2)+geom_point(data=inc2) +  geom_errorbar(data=inc2,aes(ymin = CI_lower, ymax = CI_upper),width=.1) +
+    geom_line(data=pred, aes(x=year,y=inc), color="blue") +
+    geom_ribbon(data=pred,aes(x=year,y=inc,ymin = ci_low, ymax = ci_high), alpha = 0.4) + labs(x = "Calendar year", y = "Incidence rate")
+
+dev.off() #turn off develop
+
+```
+
+```{r}
+###
+### GR by region
+
+mod_ehr_categorical = glm(event ~ as.factor(year),offset = log(fu/100000),data= d_inc_cw[d_inc_cw$program==0,], family = poisson) 
+
+
+mod_ehr_spline = glm(event ~ ns(I(year-2010),df=4),offset = log(fu/100000),data= d_inc_cw[d_inc_cw$program==0,], family = poisson) 
+
+
+
+naiveInfl3 =  IF_func(mod_ehr_categorical)
+colnames(naiveInfl3)=paste("INF", 1:ncol(naiveInfl3), sep="")
+
+d14=cbind(d_inc_cw[d_inc_cw$program==0,],naiveInfl3) 
+
+infs_eq1 <- as.formula(paste('~', paste0('INF', 1:ncol(naiveInfl3), collapse = ' + ')))
+designMF4 = twophase(id=list(~1,~1),weights=list(~1,~w_est),strata=list(NULL,~strata), data=d14,subset=~V==1,method="approx")
+Ninflcal3<-calibrate(designMF4,formula=infs_eq1,phase=2,calfun="raking") 
+mod_gr_categorical = svyglm(event_final ~ as.factor(year), offset = log(fu/100000), design=Ninflcal3, family = poisson)
+
+
+log_rates=c(coef(mod_gr_categorical)[[1]],coef(mod_gr_categorical)[[1]]+coef(mod_gr_categorical)[[2]],coef(mod_gr_categorical)[[1]]+coef(mod_gr_categorical)[[3]],coef(mod_gr_categorical)[[1]]+coef(mod_gr_categorical)[[4]],coef(mod_gr_categorical)[[1]]+coef(mod_gr_categorical)[[5]],coef(mod_gr_categorical)[[1]]+coef(mod_gr_categorical)[[6]],coef(mod_gr_categorical)[[1]]+coef(mod_gr_categorical)[[7]],coef(mod_gr_categorical)[[1]]+coef(mod_gr_categorical)[[8]],coef(mod_gr_categorical)[[1]]+coef(mod_gr_categorical)[[9]])
+
+inc_probs=exp(log_rates)
+
+ci_up=exp(log_rates+sqrt(diag(vcov(mod_gr_categorical))[-c(10)])*1.96)
+ci_low=exp(log_rates-sqrt(diag(vcov(mod_gr_categorical))[-c(10)])*1.96)
+
+inc2= data.frame(Years=2010:2018,Incidence=round(inc_probs,3),CI_lower=round(ci_low,3),CI_upper=round(ci_up,3))
+
+
+##############################################################################################################
+
+IFs =  IF_func(mod_ehr_spline)
+colnames(IFs)=paste("INF", 1:ncol(IFs), sep="")
+
+d14=cbind(d_inc_cw[d_inc_cw$program==0,],IFs) 
+
+infs_eq1 <- as.formula(paste('~', paste0('INF', 1:ncol(IFs), collapse = ' + ')))
+designMF4 = twophase(id=list(~1,~1),weights=list(~1,~w_est),strata=list(NULL,~strata), data=d14,subset=~V==1,method="approx")
+Ninflcal3<-calibrate(designMF4,formula=infs_eq1,phase=2,calfun="raking") 
+mod_gr_spline = svyglm(event_final ~ ns(I(year-2010),df=4), offset = log(fu/100000), design=Ninflcal3, family = poisson)
+
+pred <- as.data.frame(predict(mod_gr_spline, data.frame(year =seq(2010,2018.6,0.1),fu=1),se.fit=T))
+
+names(pred)=c("link","SE")
+
+pred$year <- seq(2010,2018.6,0.1)
+#pred$year_final <- 2010:2018
+pred$inc= exp(pred$link)
+
+pred$ci_low=exp(pred$link-pred$SE*1.96)
+pred$ci_high=exp(pred$link+pred$SE*1.96)
+
+pred=pred[1:(nrow(pred)-6),]
+
+library(ggplot2)
+gr2=ggplot(data=inc2, aes(x=Years, y=Incidence, group=1)) + geom_line(data=inc2)+geom_point(data=inc2) +  geom_errorbar(data=inc2,aes(ymin = CI_lower, ymax = CI_upper),width=.1) +
+    geom_line(data=pred, aes(x=year,y=inc), color="blue") +
+    geom_ribbon(data=pred,aes(x=year,y=inc,ymin = ci_low, ymax = ci_high), alpha = 0.4) + labs(x = "Calendar year", y = "Incidence rate") +      theme(axis.title.x = element_blank())  +      theme(axis.title.y = element_blank())   +
+  coord_cartesian(ylim = c(0, 700))
+
+pdf("/Users/joshslone/Desktop/PhD/Research/KS_paper/incidence_gr_over_time_no_outliers_LA.pdf",width = 7,height=5)
+
+ggplot(data=inc2, aes(x=Years, y=Incidence, group=1)) + geom_line(data=inc2)+geom_point(data=inc2) +  geom_errorbar(data=inc2,aes(ymin = CI_lower, ymax = CI_upper),width=.1) +
+    geom_line(data=pred, aes(x=year,y=inc), color="blue") +
+    geom_ribbon(data=pred,aes(x=year,y=inc,ymin = ci_low, ymax = ci_high), alpha = 0.4) + labs(x = "Calendar year", y = "Incidence rate")
+
+dev.off() #turn off develop
+
+```
+
+
+
+```{r}
+
+### Figure for manuscript
+  
+library(gridExtra)
+  # Create common X and Y axis titles as textGrob objects
+x.grob <- textGrob("Calendar year", gp = gpar(fontface = "plain", fontsize = 10.5))
+y.grob <- textGrob("Incidence (per 100,000 py)", gp = gpar(fontface = "plain", fontsize = 10.5), rot = 90)
+
+
+ehr1_1=ehr1+ggtitle("Phase-1 EA-IeDEA") + theme(plot.title = element_text(vjust = -9,hjust=0.96,size=9.5))
+ehr2_1=ehr2+ggtitle("Phase-1 CCASAnet") + theme(plot.title = element_text(vjust = -9,hjust=0.96,size=9.5))
+gr1_1=gr1+ggtitle("GR EA-IeDEA") + theme(plot.title = element_text(vjust = -9,hjust=0.85,size=10))
+gr2_1=gr2+ggtitle("GR CCASAnet") + theme(plot.title = element_text(vjust = -9,hjust=0.85,size=10))
+
+
+# Arrange the plots and add the common axis titles
+grid.arrange(
+  arrangeGrob(ehr1_1, ehr2_1, gr1_1, gr2_1, ncol = 2), 
+  left = y.grob,
+  bottom = x.grob
+)
+
+
+
+pdf("/Users/joshslone/Desktop/PhD/Research/KS_paper/inc_trends_all4.pdf",width = 7,height=5)
+
+grid.arrange(
+  arrangeGrob(ehr1_1, ehr2_1, gr1_1, gr2_1, ncol = 2), 
+  left = y.grob,
+  bottom = x.grob
+)
+
+dev.off() #turn off develop
+
+
+```
+
+
+```{r}
+
+### Figure for AIDS meeting abstract
+  
+library(gridExtra)
+  # Create common X and Y axis titles as textGrob objects
+x.grob <- textGrob("Calendar year", gp = gpar(fontface = "plain", fontsize = 10.5))
+y.grob <- textGrob("Incidence (per 100,000 py)", gp = gpar(fontface = "plain", fontsize = 10.5), rot = 90)
+
+gr1_1=gr1+ggtitle("EA-IeDEA") + theme(plot.title = element_text(vjust = -9,hjust=0.85,size=10))
+gr2_1=gr2+ggtitle("CCASAnet") + theme(plot.title = element_text(vjust = -9,hjust=0.85,size=10))
+
+
+# Arrange the plots and add the common axis titles
+grid.arrange(
+  arrangeGrob(gr1_1, gr2_1, ncol = 2), 
+  left = y.grob,
+  bottom = x.grob
+)
+
+
+
+pdf("/Users/joshslone/Desktop/PhD/Research/KS_paper/inc_trends_all_AIDS_abstract.pdf",width = 8,height=5)
+
+grid.arrange(
+  arrangeGrob(gr1_1, gr2_1, ncol = 2), 
+  left = y.grob,
+  bottom = x.grob
+)
+
+dev.off() #turn off develop
+
+
+```
+
+```{r}
+### Incident cases 
+
+
+patients_sum_inc1 = d_inc_cw |> group_by(patient,program) |> summarize(time_os=sum(fu),event=max(event))  |> filter(event==1)
+patients_sum_inc2 = d_inc_cw |> filter(V==1) |> group_by(patient,program) |> summarize(time_os=sum(fu),event_final=max(event_final))  |> filter(event_final==1)
+
+patients_sum_inc3 = d6_all |> group_by(patient,program) |> summarize(time_os=sum(fu),event=max(event))  |> filter(event==1)
+
+load("/Users/joshslone/Library/CloudStorage/OneDrive-Vanderbilt/KS_MI_datasets/pat_list.Rda") 
+
+
+setdiff(patients_sum_inc1$patient,patients_sum_inc$patient)
+
+setdiff(patients_sum_inc$patient,patients_sum_inc1$patient)
+
+
+d1 |> filter(patient %in% setdiff(patients_sum_inc$patient,patients_sum_inc1$patient)) |> View()
+
+## All eligible PWH for incidence analysis
+
+psi1 = d6  |> group_by(patient,program) |> summarize(time_os=sum(fu),event=max(event), ct=n()) 
+
+d1_s=d1 |> filter(stop_d >= as.Date("2010-01-01"))  
+
+psi2= psi1 |> inner_join(d1_s[,c("patient","male")])
+
+  load("/Users/joshslone/Library/CloudStorage/OneDrive-Vanderbilt/KS_MI_datasets/pat_list_inc_elig.Rda") 
+
+vc=setdiff(psi1$patient,psi$patient)
+
+
+d6 |> filter(patient=="br.27987") |> View()
+cv1= d1 |> filter(patient %in% vc) 
+
+ch5=d6_val1 |> group_by(patient) |> filter(row_number()==n() & program==1 ) 
+
+```
+
+```{r}
+### LTFU
+
+
+### weighted LTFU
+library(stringr)
+
+#d6_val1 = d6_val |> left_join(d_c2) 
+
+d6_val1 = d_inc_cw |> filter(V==1) 
+
+d_c=fread("/Users/joshslone/Desktop/PhD/Research/KS_Data/Code/dat_base_mi.csv") 
+  
+d_c = d_c |> mutate(center=word(strata,1))
+#patient with multiple centers, chose the most recent visit date as their center (reduces calculated LTFU rate)
+
+# 95% closure for each center to determine LTFU
+l_dates <- d_c %>% group_by(center) %>% 
+  summarise(ltfu_date=quantile(stop_d, probs = 0.95, type = 1)) 
+
+# determine which patients were lost to follow by having their last visit prior to one year before the 95% date for that center 
+
+dcc1 = d6_val1 |> mutate(center=word(strata,1)) |> left_join(d1[,c("patient","death_d_final","l_alive_d_final","canc_d_final","death_y_final")]) |> group_by(patient,death_d_final,l_alive_d_final,canc_d_final,program,death_y_final,center, male_final,w_est) |> summarize(event=max(event_final),fu=sum(fu),cd4=(last(cd4_rt_imp_final))^2,art=max(art_final),age=round(as.numeric(max(age_final,na.rm=T)),3),year=first(year))
+
+v_ltfu <- dcc1 %>% left_join(l_dates) %>% mutate(LTFU=if_else(as.Date(ltfu_date)-as.Date(l_alive_d_final)>365 & death_y_final==0 & event==0,1,0))|> mutate(yr_14=if_else(year<=2014,1,0))
+
+```
+
+
+```{r}
+
+### weighted incidence cohort characteristics EA 
+
+vars1=c( "Sex, male", "Follow-up time", "Age at at last visit", "ART experienced","CD4 at last visit","Year")
+
+n_ltf_ea=v_ltfu |> filter(event==0 & LTFU==0 & program==1)
+ltf_ea=v_ltfu |> filter(LTFU==1 & program==1 )
+ks_ltf_ea=v_ltfu |> filter(event==1 & program==1)
+
+
+n_ltf_ea_all=v_ltfu |> filter(event==0 & program==1)
+
+
+p1=c(paste(round(weighted.mean(ks_ltf_ea$male_final,ks_ltf_ea$w_est),3)*100, '%', sep = ""),paste0(round(modi::weighted.quantile(ks_ltf_ea$fu,ks_ltf_ea$w_est,prob=0.5),1)," ","(",round(modi::weighted.quantile(ks_ltf_ea$fu,ks_ltf_ea$w_est,prob=0.25),1),", ", round(modi::weighted.quantile(ks_ltf_ea$fu,ks_ltf_ea$w_est,prob=0.75),1),")"),paste0(round(modi::weighted.quantile(ks_ltf_ea$age,ks_ltf_ea$w_est,prob=0.5),1)," ","(",round(modi::weighted.quantile(ks_ltf_ea$age,ks_ltf_ea$w_est,prob=0.25),1),", ", round(modi::weighted.quantile(ks_ltf_ea$age,ks_ltf_ea$w_est,prob=0.75),1),")"),paste(round(weighted.mean(ks_ltf_ea$art,ks_ltf_ea$w_est)
+,3)*100, '%', sep = ""),paste0(round(modi::weighted.quantile(ks_ltf_ea$cd4,ks_ltf_ea$w_est,prob=0.5),1)," ","(",round(modi::weighted.quantile(ks_ltf_ea$cd4,ks_ltf_ea$w_est,prob=0.25),1),", ", round(modi::weighted.quantile(ks_ltf_ea$cd4,ks_ltf_ea$w_est,prob=0.75),1),")"),paste0(round(quantile(ks_ltf_ea$year)[[3]],1)," ","(",round(quantile(ks_ltf_ea$year)[[2]],1),", ", round(quantile(ks_ltf_ea$year)[[4]],1),")"))
+
+p2=c(paste(round(weighted.mean(ltf_ea$male_final,ltf_ea$w_est),3)*100, '%', sep = ""),paste0(round(modi::weighted.quantile(ltf_ea$fu,ltf_ea$w_est,prob=0.5),1)," ","(",round(modi::weighted.quantile(ltf_ea$fu,ltf_ea$w_est,prob=0.25),1),", ", round(modi::weighted.quantile(ltf_ea$fu,ltf_ea$w_est,prob=0.75),1),")"),paste0(round(modi::weighted.quantile(ltf_ea$age,ltf_ea$w_est,prob=0.5),1)," ","(",round(modi::weighted.quantile(ltf_ea$age,ltf_ea$w_est,prob=0.25),1),", ", round(modi::weighted.quantile(ltf_ea$age,ltf_ea$w_est,prob=0.75),1),")"),paste(round(weighted.mean(ltf_ea$art,ltf_ea$w_est)
+,3)*100, '%', sep = ""),paste0(round(modi::weighted.quantile(ltf_ea$cd4,ltf_ea$w_est,prob=0.5),1)," ","(",round(modi::weighted.quantile(ltf_ea$cd4,ltf_ea$w_est,prob=0.25),1),", ", round(modi::weighted.quantile(ltf_ea$cd4,ltf_ea$w_est,prob=0.75),1),")"),paste0(round(quantile(ltf_ea$year)[[3]],1)," ","(",round(quantile(ltf_ea$year)[[2]],1),", ", round(quantile(ltf_ea$year)[[4]],1),")"))
+
+p3=c(paste(round(weighted.mean(n_ltf_ea$male_final,n_ltf_ea$w_est),3)*100, '%', sep = ""),paste0(round(modi::weighted.quantile(n_ltf_ea$fu,n_ltf_ea$w_est,prob=0.5),1)," ","(",round(modi::weighted.quantile(n_ltf_ea$fu,n_ltf_ea$w_est,prob=0.25),1),", ", round(modi::weighted.quantile(n_ltf_ea$fu,n_ltf_ea$w_est,prob=0.75),1),")"),paste0(round(modi::weighted.quantile(n_ltf_ea$age,n_ltf_ea$w_est,prob=0.5),1)," ","(",round(modi::weighted.quantile(n_ltf_ea$age,n_ltf_ea$w_est,prob=0.25),1),", ", round(modi::weighted.quantile(n_ltf_ea$age,n_ltf_ea$w_est,prob=0.75),1),")"),paste(round(weighted.mean(n_ltf_ea$art,n_ltf_ea$w_est)
+,3)*100, '%', sep = ""),paste0(round(modi::weighted.quantile(n_ltf_ea$cd4,n_ltf_ea$w_est,prob=0.5),1)," ","(",round(modi::weighted.quantile(n_ltf_ea$cd4,n_ltf_ea$w_est,prob=0.25),1),", ", round(modi::weighted.quantile(n_ltf_ea$cd4,n_ltf_ea$w_est,prob=0.75),1),")"),paste0(round(quantile(n_ltf_ea$year)[[3]],1)," ","(",round(quantile(n_ltf_ea$year)[[2]],1),", ", round(quantile(n_ltf_ea$year)[[4]],1),")"))
+
+p4=c(paste(round(weighted.mean(n_ltf_ea_all$male_final,n_ltf_ea_all$w_est),3)*100, '%', sep = ""),paste0(round(modi::weighted.quantile(n_ltf_ea_all$fu,n_ltf_ea_all$w_est,prob=0.5),1)," ","(",round(modi::weighted.quantile(n_ltf_ea_all$fu,n_ltf_ea_all$w_est,prob=0.25),1),", ", round(modi::weighted.quantile(n_ltf_ea_all$fu,n_ltf_ea_all$w_est,prob=0.75),1),")"),paste0(round(modi::weighted.quantile(n_ltf_ea_all$age,n_ltf_ea_all$w_est,prob=0.5),1)," ","(",round(modi::weighted.quantile(n_ltf_ea_all$age,n_ltf_ea_all$w_est,prob=0.25),1),", ", round(modi::weighted.quantile(n_ltf_ea_all$age,n_ltf_ea_all$w_est,prob=0.75),1),")"),paste(round(weighted.mean(n_ltf_ea_all$art,n_ltf_ea_all$w_est)
+,3)*100, '%', sep = ""),paste0(round(modi::weighted.quantile(n_ltf_ea_all$cd4,n_ltf_ea_all$w_est,prob=0.5),1)," ","(",round(modi::weighted.quantile(n_ltf_ea_all$cd4,n_ltf_ea_all$w_est,prob=0.25),1),", ", round(modi::weighted.quantile(n_ltf_ea_all$cd4,n_ltf_ea_all$w_est,prob=0.75),1),")"),paste0(round(quantile(n_ltf_ea_all$year)[[3]],1)," ","(",round(quantile(n_ltf_ea_all$year)[[2]],1),", ", round(quantile(n_ltf_ea_all$year)[[4]],1),")"))
+
+v2=data.frame(vars1,p1,p2,p3,p4)
+
+ktab<-kable(v2,caption = "Characteristics of weighted incidence cohort",booktabs=TRUE,col.names = c("Variable","Incident (N=176)","LTFU (N=167)","Censored (N=391)","Not incident"),linesep = "\\addlinespace")
+
+kable_styling(ktab,full_width = F, font_size = 10,latex_options = "scale_down") |> add_footnote("Binary variables include percentages. Numeric variables include medians (25th and 75th percentiles).")
+
+```
+
+
+
+
+```{r}
+
+### weighted incidence cohort characteristics CN 
+
+
+n_ltf_cn=v_ltfu |> filter(event==0 & LTFU==0 & program==0)
+ltf_cn=v_ltfu |> filter(LTFU==1 & program==0 )
+ks_ltf_cn=v_ltfu |> filter(event==1 & program==0)
+
+n_ltf_cn_all=v_ltfu |> filter(event==0 & program==0)
+
+p1=c(paste(round(weighted.mean(ks_ltf_cn$male_final,ks_ltf_cn$w_est),3)*100, '%', sep = ""),paste0(round(modi::weighted.quantile(ks_ltf_cn$fu,ks_ltf_cn$w_est,prob=0.5),1)," ","(",round(modi::weighted.quantile(ks_ltf_cn$fu,ks_ltf_cn$w_est,prob=0.25),1),", ", round(modi::weighted.quantile(ks_ltf_cn$fu,ks_ltf_cn$w_est,prob=0.75),1),")"),paste0(round(modi::weighted.quantile(ks_ltf_cn$age,ks_ltf_cn$w_est,prob=0.5),1)," ","(",round(modi::weighted.quantile(ks_ltf_cn$age,ks_ltf_cn$w_est,prob=0.25),1),", ", round(modi::weighted.quantile(ks_ltf_cn$age,ks_ltf_cn$w_est,prob=0.75),1),")"),paste(round(weighted.mean(ks_ltf_cn$art,ks_ltf_cn$w_est)
+,3)*100, '%', sep = ""),paste0(round(modi::weighted.quantile(ks_ltf_cn$cd4,ks_ltf_cn$w_est,prob=0.5),1)," ","(",round(modi::weighted.quantile(ks_ltf_cn$cd4,ks_ltf_cn$w_est,prob=0.25),1),", ", round(modi::weighted.quantile(ks_ltf_cn$cd4,ks_ltf_cn$w_est,prob=0.75),1),")"),paste0(round(quantile(ks_ltf_cn$year)[[3]],1)," ","(",round(quantile(ks_ltf_cn$year)[[2]],1),", ", round(quantile(ks_ltf_cn$year)[[4]],1),")"))
+
+p2=c(paste(round(weighted.mean(ltf_cn$male_final,ltf_cn$w_est),3)*100, '%', sep = ""),paste0(round(modi::weighted.quantile(ltf_cn$fu,ltf_cn$w_est,prob=0.5),1)," ","(",round(modi::weighted.quantile(ltf_cn$fu,ltf_cn$w_est,prob=0.25),1),", ", round(modi::weighted.quantile(ltf_cn$fu,ltf_cn$w_est,prob=0.75),1),")"),paste0(round(modi::weighted.quantile(ltf_cn$age,ltf_cn$w_est,prob=0.5),1)," ","(",round(modi::weighted.quantile(ltf_cn$age,ltf_cn$w_est,prob=0.25),1),", ", round(modi::weighted.quantile(ltf_cn$age,ltf_cn$w_est,prob=0.75),1),")"),paste(round(weighted.mean(ltf_cn$art,ltf_cn$w_est)
+,3)*100, '%', sep = ""),paste0(round(modi::weighted.quantile(ltf_cn$cd4,ltf_cn$w_est,prob=0.5),1)," ","(",round(modi::weighted.quantile(ltf_cn$cd4,ltf_cn$w_est,prob=0.25),1),", ", round(modi::weighted.quantile(ltf_cn$cd4,ltf_cn$w_est,prob=0.75),1),")"),paste0(round(quantile(ltf_cn$year)[[3]],1)," ","(",round(quantile(ltf_cn$year)[[2]],1),", ", round(quantile(ltf_cn$year)[[4]],1),")"))
+
+p3=c(paste(round(weighted.mean(n_ltf_cn$male_final,n_ltf_cn$w_est),3)*100, '%', sep = ""),paste0(round(modi::weighted.quantile(n_ltf_cn$fu,n_ltf_cn$w_est,prob=0.5),1)," ","(",round(modi::weighted.quantile(n_ltf_cn$fu,n_ltf_cn$w_est,prob=0.25),1),", ", round(modi::weighted.quantile(n_ltf_cn$fu,n_ltf_cn$w_est,prob=0.75),1),")"),paste0(round(modi::weighted.quantile(n_ltf_cn$age,n_ltf_cn$w_est,prob=0.5),1)," ","(",round(modi::weighted.quantile(n_ltf_cn$age,n_ltf_cn$w_est,prob=0.25),1),", ", round(modi::weighted.quantile(n_ltf_cn$age,n_ltf_cn$w_est,prob=0.75),1),")"),paste(round(weighted.mean(n_ltf_cn$art,n_ltf_cn$w_est)
+,3)*100, '%', sep = ""),paste0(round(modi::weighted.quantile(n_ltf_cn$cd4,n_ltf_cn$w_est,prob=0.5),1)," ","(",round(modi::weighted.quantile(n_ltf_cn$cd4,n_ltf_cn$w_est,prob=0.25),1),", ", round(modi::weighted.quantile(n_ltf_cn$cd4,n_ltf_cn$w_est,prob=0.75),1),")"),paste0(round(quantile(n_ltf_cn$year)[[3]],1)," ","(",round(quantile(n_ltf_cn$year)[[2]],1),", ", round(quantile(n_ltf_cn$year)[[4]],1),")"))
+
+p4=c(paste(round(weighted.mean(n_ltf_cn_all$male_final,n_ltf_cn_all$w_est),3)*100, '%', sep = ""),paste0(round(modi::weighted.quantile(n_ltf_cn_all$fu,n_ltf_cn_all$w_est,prob=0.5),1)," ","(",round(modi::weighted.quantile(n_ltf_cn_all$fu,n_ltf_cn_all$w_est,prob=0.25),1),", ", round(modi::weighted.quantile(n_ltf_cn_all$fu,n_ltf_cn_all$w_est,prob=0.75),1),")"),paste0(round(modi::weighted.quantile(n_ltf_cn_all$age,n_ltf_cn_all$w_est,prob=0.5),1)," ","(",round(modi::weighted.quantile(n_ltf_cn_all$age,n_ltf_cn_all$w_est,prob=0.25),1),", ", round(modi::weighted.quantile(n_ltf_cn_all$age,n_ltf_cn_all$w_est,prob=0.75),1),")"),paste(round(weighted.mean(n_ltf_cn_all$art,n_ltf_cn_all$w_est)
+,3)*100, '%', sep = ""),paste0(round(modi::weighted.quantile(n_ltf_cn_all$cd4,n_ltf_cn_all$w_est,prob=0.5),1)," ","(",round(modi::weighted.quantile(n_ltf_cn_all$cd4,n_ltf_cn_all$w_est,prob=0.25),1),", ", round(modi::weighted.quantile(n_ltf_cn_all$cd4,n_ltf_cn_all$w_est,prob=0.75),1),")"),paste0(round(quantile(n_ltf_cn_all$year)[[3]],1)," ","(",round(quantile(n_ltf_cn_all$year)[[2]],1),", ", round(quantile(n_ltf_cn_all$year)[[4]],1),")"))
+
+v2=data.frame(vars1,p1,p2,p3,p4)
+
+ktab<-kable(v2,caption = "Characteristics of weighted incidence cohort",booktabs=TRUE,col.names = c("Variable","Incident (N=176)","LTFU (N=167)","Censored (N=391)","Not incident"),linesep = "\\addlinespace")
+
+kable_styling(ktab,full_width = F, font_size = 10,latex_options = "scale_down") |> add_footnote("Binary variables include percentages. Numeric variables include medians (25th and 75th percentiles).")
+
+```
+
+
+
+
+```{r}
+
+### Phase-1 incidence cohort characteristics EA 
+
+
+### weighted LTFU
+library(stringr)
+
+# determine which patients were lost to follow by having their last visit prior to one year before the 95% date for that center 
+
+dcc_ehr = d_inc_cw |> mutate(center=word(strata,1)) |> left_join(d1[,c("patient","death_d","stop_d","dis_d","death_y")]) |> group_by(patient,death_d,stop_d,dis_d,program,death_y,center, male,w_est) |> summarize(event=max(event),fu=sum(fu),cd4=(first(cd4_rt_init_imp))^2,art=max(art),age=round(as.numeric(max(age,na.rm=T)),3),year=first(year))
+
+p1_ltfu <- dcc_ehr %>% left_join(l_dates) %>% mutate(LTFU=if_else(as.Date(ltfu_date)-as.Date(stop_d)>365 & death_y==0 & event==0,1,0)) |> mutate(yr_14=if_else(year<=2014,1,0))
+
+#ltfu_summary<-v_ltfu%>%group_by(program)%>%summarise(n=n(),LTFU=sum(LTFU),LTFU_Percent=round(100*sum(LTFU)/n(),2))
+
+#ltfu_summary1<-v_ltfu%>%group_by(event,)%>%summarise(n=n(),LTFU=sum(LTFU),LTFU_Percent=round(100*sum(LTFU)/n(),2))
+
+
+### break down into Not LTFU, KS, LTFU (did not die, did not have KS, left a year before database closure)
+
+n_lft1=p1_ltfu |> filter(event==0 & LTFU==0 & program==1)
+lft1=p1_ltfu |> filter(LTFU==1 & program==1)
+ks_lft1=p1_ltfu |> filter(event==1 & program==1)
+
+n_lft1_all=p1_ltfu |> filter(event==0 & program==1)
+
+### table to analyze LTFU with rows of covariates and columns of incident KS, LTFU, and not LTFU/incident
+
+vars=c( "Sex, male", "Follow-up time", "Age at at last visit", "ART experienced","CD4 at last visit","Year")
+
+
+p1=c(paste(round(table(ks_lft1$male)[[2]]/sum(table(ks_lft1$male)),3)*100, '%', sep = ""),paste0(round(quantile(ks_lft1$fu)[[3]],1)," ","(",round(quantile(ks_lft1$fu)[[2]],1),", ", round(quantile(ks_lft1$fu)[[4]],1),")"),paste0(round(quantile(ks_lft1$age)[[3]],1)," ","(",round(quantile(ks_lft1$age)[[2]],1),", ", round(quantile(ks_lft1$age)[[4]],1),")"),paste(round(table(ks_lft1$art)[[2]]/sum(table(ks_lft1$art)),3)*100, '%', sep = ""),paste0(round(quantile(ks_lft1$cd4)[[3]],1)," ","(",round(quantile(ks_lft1$cd4)[[2]],1),", ", round(quantile(ks_lft1$cd4)[[4]],1),")"),paste0(round(quantile(ks_lft1$year)[[3]],1)," ","(",round(quantile(ks_lft1$year)[[2]],1),", ", round(quantile(ks_lft1$year)[[4]],1),")"))
+
+p2=c(paste(round(table(lft1$male)[[2]]/sum(table(lft1$male)),3)*100, '%', sep = ""),paste0(round(quantile(lft1$fu)[[3]],1)," ","(",round(quantile(lft1$fu)[[2]],1),", ", round(quantile(lft1$fu)[[4]],1),")"),paste0(round(quantile(lft1$age)[[3]],1)," ","(",round(quantile(lft1$age)[[2]],1),", ", round(quantile(lft1$age)[[4]],1),")"),paste(round(table(lft1$art)[[2]]/sum(table(lft1$art)),3)*100, '%', sep = ""),paste0(round(quantile(lft1$cd4)[[3]],1)," ","(",round(quantile(lft1$cd4)[[2]],1),", ", round(quantile(lft1$cd4)[[4]],1),")"),paste0(round(quantile(lft1$year)[[3]],1)," ","(",round(quantile(lft1$year)[[2]],1),", ", round(quantile(lft1$year)[[4]],1),")"))
+
+p3=c(paste(round(table(n_lft1$male)[[2]]/sum(table(n_lft1$male)),3)*100, '%', sep = ""),paste0(round(quantile(n_lft1$fu)[[3]],1)," ","(",round(quantile(n_lft1$fu)[[2]],1),", ", round(quantile(n_lft1$fu)[[4]],1),")"),paste0(round(quantile(n_lft1$age)[[3]],1)," ","(",round(quantile(n_lft1$age)[[2]],1),", ", round(quantile(n_lft1$age)[[4]],1),")"),paste(round(table(n_lft1$art)[[2]]/sum(table(n_lft1$art)),3)*100, '%', sep = ""),paste0(round(quantile(n_lft1$cd4)[[3]],1)," ","(",round(quantile(n_lft1$cd4)[[2]],1),", ", round(quantile(n_lft1$cd4)[[4]],1),")"),paste0(round(quantile(n_lft1$year)[[3]],1)," ","(",round(quantile(n_lft1$year)[[2]],1),", ", round(quantile(n_lft1$year)[[4]],1),")"))
+
+
+p4=c(paste(round(table(n_lft1_all$male)[[2]]/sum(table(n_lft1_all$male)),3)*100, '%', sep = ""),paste0(round(quantile(n_lft1_all$fu)[[3]],1)," ","(",round(quantile(n_lft1_all$fu)[[2]],1),", ", round(quantile(n_lft1_all$fu)[[4]],1),")"),paste0(round(quantile(n_lft1_all$age)[[3]],1)," ","(",round(quantile(n_lft1_all$age)[[2]],1),", ", round(quantile(n_lft1_all$age)[[4]],1),")"),paste(round(table(n_lft1_all$art)[[2]]/sum(table(n_lft1_all$art)),3)*100, '%', sep = ""),paste0(round(quantile(n_lft1_all$cd4)[[3]],1)," ","(",round(quantile(n_lft1_all$cd4)[[2]],1),", ", round(quantile(n_lft1_all$cd4)[[4]],1),")"),paste0(round(quantile(n_lft1_all$year)[[3]],1)," ","(",round(quantile(n_lft1_all$year)[[2]],1),", ", round(quantile(n_lft1_all$year)[[4]],1),")"))
+
+
+v3=data.frame(vars,p1,p2,p3,p4)
+
+ktab<-kable(v3,caption = "Characteristics of error-prone incidence cohort",booktabs=TRUE,col.names = c("Variable","Incident (N=193)","LTFU (N=179)","Not LTFU (N=453)","Not incident"),linesep = "\\addlinespace")
+
+kable_styling(ktab,full_width = F, font_size = 10,latex_options = "scale_down") |> add_footnote("Binary variables include percentages. Numeric variables include medians (25th and 75th percentiles).")
+
+
+```
+
+
+```{r}
+
+### Phase-1 incidence cohort characteristics LA 
+
+n_lft2=p1_ltfu |> filter(event==0 & LTFU==0 & program==0)
+lft2=p1_ltfu |> filter(LTFU==1 & program==0)
+ks_lft2=p1_ltfu |> filter(event==1 & program==0)
+
+n_lft2_all=p1_ltfu |> filter(event==0 & program==0)
+
+
+vars=c( "Sex, male", "Follow-up time", "Age at at last visit", "ART experienced","CD4 at last visit","Year")
+
+
+p1=c(paste(round(table(ks_lft2$male)[[2]]/sum(table(ks_lft2$male)),3)*100, '%', sep = ""),paste0(round(quantile(ks_lft2$fu)[[3]],1)," ","(",round(quantile(ks_lft2$fu)[[2]],1),", ", round(quantile(ks_lft2$fu)[[4]],1),")"),paste0(round(quantile(ks_lft2$age)[[3]],1)," ","(",round(quantile(ks_lft2$age)[[2]],1),", ", round(quantile(ks_lft2$age)[[4]],1),")"),paste(round(table(ks_lft2$art)[[2]]/sum(table(ks_lft2$art)),3)*100, '%', sep = ""),paste0(round(quantile(ks_lft2$cd4)[[3]],1)," ","(",round(quantile(ks_lft2$cd4)[[2]],1),", ", round(quantile(ks_lft2$cd4)[[4]],1),")"),paste0(round(quantile(ks_lft2$year)[[3]],1)," ","(",round(quantile(ks_lft2$year)[[2]],1),", ", round(quantile(ks_lft2$year)[[4]],1),")"))
+
+p2=c(paste(round(table(lft2$male)[[2]]/sum(table(lft2$male)),3)*100, '%', sep = ""),paste0(round(quantile(lft2$fu)[[3]],1)," ","(",round(quantile(lft2$fu)[[2]],1),", ", round(quantile(lft2$fu)[[4]],1),")"),paste0(round(quantile(lft2$age)[[3]],1)," ","(",round(quantile(lft2$age)[[2]],1),", ", round(quantile(lft2$age)[[4]],1),")"),paste(round(table(lft2$art)[[2]]/sum(table(lft2$art)),3)*100, '%', sep = ""),paste0(round(quantile(lft2$cd4)[[3]],1)," ","(",round(quantile(lft2$cd4)[[2]],1),", ", round(quantile(lft2$cd4)[[4]],1),")"),paste0(round(quantile(lft2$year)[[3]],1)," ","(",round(quantile(lft2$year)[[2]],1),", ", round(quantile(lft2$year)[[4]],1),")"))
+
+p3=c(paste(round(table(n_lft2$male)[[2]]/sum(table(n_lft2$male)),3)*100, '%', sep = ""),paste0(round(quantile(n_lft2$fu)[[3]],1)," ","(",round(quantile(n_lft2$fu)[[2]],1),", ", round(quantile(n_lft2$fu)[[4]],1),")"),paste0(round(quantile(n_lft2$age)[[3]],1)," ","(",round(quantile(n_lft2$age)[[2]],1),", ", round(quantile(n_lft2$age)[[4]],1),")"),paste(round(table(n_lft2$art)[[2]]/sum(table(n_lft2$art)),3)*100, '%', sep = ""),paste0(round(quantile(n_lft2$cd4)[[3]],1)," ","(",round(quantile(n_lft2$cd4)[[2]],1),", ", round(quantile(n_lft2$cd4)[[4]],1),")"),paste0(round(quantile(n_lft2$year)[[3]],1)," ","(",round(quantile(n_lft2$year)[[2]],1),", ", round(quantile(n_lft2$year)[[4]],1),")"))
+
+p4=c(paste(round(table(n_lft2_all$male)[[2]]/sum(table(n_lft2_all$male)),3)*100, '%', sep = ""),paste0(round(quantile(n_lft2_all$fu)[[3]],1)," ","(",round(quantile(n_lft2_all$fu)[[2]],1),", ", round(quantile(n_lft2_all$fu)[[4]],1),")"),paste0(round(quantile(n_lft2_all$age)[[3]],1)," ","(",round(quantile(n_lft2_all$age)[[2]],1),", ", round(quantile(n_lft2_all$age)[[4]],1),")"),paste(round(table(n_lft2_all$art)[[2]]/sum(table(n_lft2_all$art)),3)*100, '%', sep = ""),paste0(round(quantile(n_lft2_all$cd4)[[3]],1)," ","(",round(quantile(n_lft2_all$cd4)[[2]],1),", ", round(quantile(n_lft2_all$cd4)[[4]],1),")"),paste0(round(quantile(n_lft2_all$year)[[3]],1)," ","(",round(quantile(n_lft2_all$year)[[2]],1),", ", round(quantile(n_lft2_all$year)[[4]],1),")"))
+
+
+v3=data.frame(vars,p1,p2,p3,p4)
+
+ktab<-kable(v3,caption = "Characteristics of error-prone incidence cohort",booktabs=TRUE,col.names = c("Variable","Incident (N=193)","LTFU (N=179)","Not LTFU (N=453)", "Not incident"),linesep = "\\addlinespace")
+
+kable_styling(ktab,full_width = F, font_size = 10,latex_options = "scale_down") |> add_footnote("Binary variables include percentages. Numeric variables include medians (25th and 75th percentiles).")
+
+
+```
+
